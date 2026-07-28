@@ -94,6 +94,7 @@ body {
 .light .text-gray-400.uppercase { color: #64748b; }
 
 /* Keep white text on colored/gradient backgrounds */
+/* Parent→child selectors */
 .light .bg-indigo-600 .text-white,
 .light .bg-blue-600 .text-white,
 .light .bg-blue-700 .text-white,
@@ -105,6 +106,23 @@ body {
 .light [class*="from-blue-"] .text-white,
 .light [class*="to-purple-"] .text-white,
 .light [class*="from-indigo-"] .text-white { color: #ffffff; }
+/* Same-element selectors (e.g. user chat bubbles: bg-blue-600 text-white on same div) */
+.light .bg-blue-600.text-white,
+.light .bg-blue-700.text-white,
+.light .bg-indigo-600.text-white,
+.light .bg-indigo-500.text-white,
+.light .bg-red-600.text-white,
+.light .bg-green-600.text-white,
+.light .bg-purple-600.text-white,
+.light .bg-pink-600.text-white,
+.light .bg-amber-600.text-white,
+.light .bg-emerald-600.text-white,
+.light .bg-blue-600.text-white:hover,
+.light .bg-blue-700.text-white:hover,
+.light .bg-indigo-600.text-white:hover,
+.light .bg-red-600.text-white:hover,
+.light .bg-red-500.text-white:hover,
+.light .bg-amber-600.text-white:hover { color: #ffffff; }
 
 /* Hover states */
 .light .hover\:bg-gray-800:hover { background-color: #f1f5f9; }

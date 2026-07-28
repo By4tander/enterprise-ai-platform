@@ -73,11 +73,16 @@ async def chat_stream(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="项目已归档，无法对话")
 
     # ── 2. 保存用户消息（先落库） ──
+    import json as _json
+    attachments_json_str = None
+    if req.attachments:
+        attachments_json_str = _json.dumps(req.attachments, ensure_ascii=False)
     user_msg = Message(
         project_id=req.project_id,
         sender_type=SenderType.USER,
         sender_name=current_user.username,
         content=req.content,
+        attachments_json=attachments_json_str,
     )
     db.add(user_msg)
     await db.commit()

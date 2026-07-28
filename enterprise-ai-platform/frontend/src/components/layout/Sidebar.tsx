@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useAppStore } from '../../store'
 import { api } from '../../services/api'
-import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, Loader2, AlertCircle, Pencil, Check, X } from 'lucide-react'
+import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, Loader2, AlertCircle, Pencil, Check, X, Zap } from 'lucide-react'
 
 interface Project {
   id: string
@@ -98,6 +98,12 @@ export default function Sidebar() {
       active: location.pathname === '/' || location.pathname.startsWith('/project/'),
     },
     {
+      icon: Zap,
+      label: 'Hermes 全局技能',
+      path: '/global-skills',
+      active: location.pathname === '/global-skills',
+    },
+    {
       icon: BookOpen,
       label: '部门技能/记忆库',
       path: '/skills',
@@ -134,7 +140,7 @@ export default function Sidebar() {
             key={item.path}
             onClick={() => {
               navigate(item.path)
-              if (item.path === '/archived' || item.path === '/skills') {
+              if (item.path === '/archived' || item.path === '/skills' || item.path === '/global-skills') {
                 setCurrentProject(null)
               }
             }}
@@ -154,12 +160,12 @@ export default function Sidebar() {
         <div className="my-3 border-t border-gray-800" />
 
         {/* Active Projects */}
-        <p className="px-3 text-xs text-gray-600 uppercase tracking-wider mb-2 font-medium">
+        <p className="px-3 text-xs text-gray-400 uppercase tracking-wider mb-2 font-medium">
           进行中的项目
         </p>
         {loading ? (
           <div className="flex justify-center py-4">
-            <Loader2 className="w-5 h-5 text-gray-500 animate-spin" />
+            <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
           </div>
         ) : loadError ? (
           <div className="px-3 py-2 text-xs text-red-400 flex items-center gap-1">
@@ -168,7 +174,7 @@ export default function Sidebar() {
             <button onClick={loadProjects} className="ml-auto text-blue-400 hover:underline">重试</button>
           </div>
         ) : projects.length === 0 ? (
-          <p className="px-3 text-xs text-gray-600">暂无项目</p>
+          <p className="px-3 text-xs text-gray-500">暂无项目</p>
         ) : (
           projects.map((p) => (
             <div key={p.id} className="group/proj relative">

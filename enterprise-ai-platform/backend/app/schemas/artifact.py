@@ -18,6 +18,7 @@ class ArtifactOut(BaseModel):
     content: str
     file_type: str
     artifact_path: str | None = None
+    file_size: int = 0
     created_at: datetime
 
     class Config:

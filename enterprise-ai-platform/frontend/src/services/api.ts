@@ -121,6 +121,8 @@ export const api = {
 
   getNativeSkills: () => request('/skills/native'),
 
+  getGlobalSkills: () => request('/skills/global'),
+
   searchSkills: (q: string) => request(`/skills/search?q=${encodeURIComponent(q)}`),
 
   createSkill: (data: any) =>
@@ -147,6 +149,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+
+  // ── Locks (项目协作锁定) ──
+  getLockStatus: (projectId: string) => request(`/locks/status/${projectId}`),
+  acquireLock: (projectId: string) => request('/locks/acquire', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
+  releaseLock: (projectId: string) => request('/locks/release', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
+  requestTransfer: (projectId: string) => request('/locks/request-transfer', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
+  getPendingRequests: () => request('/locks/pending-requests'),
+  getMyRequests: () => request('/locks/my-requests'),
+  respondTransfer: (requestId: string, approved: boolean) => request('/locks/respond-transfer', { method: 'POST', body: JSON.stringify({ request_id: requestId, approved }) }),
+  forceTakeover: (projectId: string) => request('/locks/force-takeover', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
 };
 
 // ── SSE 流式聊天 ──
@@ -164,7 +176,9 @@ export function chatStream(
     onQueue?: (msg: string) => void;
     onDone?: (messageId: string) => void;
     onError?: (error: string) => void;
-  }
+  },
+  filePaths?: string[],
+  attachments?: Array<{ filename: string; size: number; stored_path?: string; content_type?: string }>
 ): AbortController {
   const controller = new AbortController();
   const token = localStorage.getItem('access_token');
@@ -175,7 +189,12 @@ export function chatStream(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ project_id: projectId, content }),
+    body: JSON.stringify({
+      project_id: projectId,
+      content,
+      file_paths: filePaths || [],
+      attachments: attachments || [],
+    }),
     signal: controller.signal,
   })
     .then(async (response) => {

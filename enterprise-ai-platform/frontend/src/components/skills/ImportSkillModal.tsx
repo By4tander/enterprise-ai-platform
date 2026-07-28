@@ -207,16 +207,50 @@ export default function ImportSkillModal({
           )}
 
           {mode === 'file' && (
-            <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition-colors">
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('border-blue-400', 'bg-blue-500/10') }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-blue-400', 'bg-blue-500/10') }}
+              onDrop={(e) => {
+                e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-blue-400', 'bg-blue-500/10')
+                const file = e.dataTransfer.files?.[0]
+                if (file) {
+                  const dt = new DataTransfer()
+                  dt.items.add(file)
+                  if (fileInputRef.current) {
+                    fileInputRef.current.files = dt.files
+                    fileInputRef.current.dispatchEvent(new Event('change', { bubbles: true }))
+                  }
+                }
+              }}
+              className="border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition-all"
+            >
               <Upload className="w-8 h-8 text-gray-500 mx-auto mb-2" />
-              <p className="text-sm text-gray-400">点击上传 Skill 文件</p>
+              <p className="text-sm text-gray-400">点击或拖拽上传 Skill 文件</p>
               <p className="text-xs text-gray-600 mt-1">支持 .json / .yaml / .yml / .md</p>
               <input ref={fileInputRef} type="file" accept=".json,.yaml,.yml,.md" onChange={handleTextFile} className="hidden" />
             </div>
           )}
 
           {mode === 'zip' && (
-            <div onClick={() => zipInputRef.current?.click()} className="border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition-colors">
+            <div
+              onClick={() => zipInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('border-blue-400', 'bg-blue-500/10') }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-blue-400', 'bg-blue-500/10') }}
+              onDrop={(e) => {
+                e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('border-blue-400', 'bg-blue-500/10')
+                const file = e.dataTransfer.files?.[0]
+                if (file) {
+                  const dt = new DataTransfer()
+                  dt.items.add(file)
+                  if (zipInputRef.current) {
+                    zipInputRef.current.files = dt.files
+                    zipInputRef.current.dispatchEvent(new Event('change', { bubbles: true }))
+                  }
+                }
+              }}
+              className="border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition-all"
+            >
               <Package className="w-10 h-10 text-gray-500 mx-auto mb-2" />
               <p className="text-sm text-gray-400 font-medium">上传 ZIP 技能包</p>
               <p className="text-xs text-gray-600 mt-2">

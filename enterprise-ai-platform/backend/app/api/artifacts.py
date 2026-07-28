@@ -41,18 +41,30 @@ async def list_artifacts(
     )
     artifacts = result.scalars().all()
 
-    return [
-        ArtifactOut(
+    isolation = SessionIsolationEngine()
+    sandbox = isolation.get_project_sandbox(project_id)
+
+    out = []
+    for a in artifacts:
+        file_size = 0
+        if a.artifact_path:
+            fp = sandbox / a.artifact_path
+            if fp.exists():
+                try:
+                    file_size = fp.stat().st_size
+                except OSError:
+                    pass
+        out.append(ArtifactOut(
             id=a.id,
             project_id=a.project_id,
             title=a.title,
             content=a.content,
             file_type=a.file_type,
             artifact_path=a.artifact_path,
+            file_size=file_size,
             created_at=a.created_at,
-        )
-        for a in artifacts
-    ]
+        ))
+    return out
 
 
 @router.post("/", response_model=ArtifactOut, status_code=status.HTTP_201_CREATED)

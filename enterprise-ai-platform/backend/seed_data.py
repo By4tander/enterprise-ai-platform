@@ -41,52 +41,31 @@ async def seed_data():
         users_data = [
             {
                 "username": "admin",
-                "password": "admin123",
+                "password": "admin",
                 "display_name": "系统管理员",
                 "role": UserRole.SUPER_ADMIN,
                 "department_id": None,
             },
             {
-                "username": "bianju_admin",
-                "password": "bianju123",
+                "username": "bianju",
+                "password": "bianju",
                 "display_name": "编剧部主管",
                 "role": UserRole.DEPT_ADMIN,
                 "department_id": dept_map["编剧部"].id,
             },
             {
-                "username": "writer_zhang",
-                "password": "writer123",
-                "display_name": "张编剧",
+                "username": "bianju1",
+                "password": "bianju1",
+                "display_name": "编剧1",
                 "role": UserRole.MEMBER,
                 "department_id": dept_map["编剧部"].id,
             },
             {
-                "username": "writer_li",
-                "password": "writer123",
-                "display_name": "李编剧",
+                "username": "bianju2",
+                "password": "bianju2",
+                "display_name": "编剧2",
                 "role": UserRole.MEMBER,
                 "department_id": dept_map["编剧部"].id,
-            },
-            {
-                "username": "art_admin",
-                "password": "art123",
-                "display_name": "美术部主管",
-                "role": UserRole.DEPT_ADMIN,
-                "department_id": dept_map["美术部"].id,
-            },
-            {
-                "username": "artist_wang",
-                "password": "art123",
-                "display_name": "王美术",
-                "role": UserRole.MEMBER,
-                "department_id": dept_map["美术部"].id,
-            },
-            {
-                "username": "publish_admin",
-                "password": "pub123",
-                "display_name": "发行部主管",
-                "role": UserRole.DEPT_ADMIN,
-                "department_id": dept_map["发行部"].id,
             },
         ]
 
@@ -103,12 +82,9 @@ async def seed_data():
 
         await session.commit()
         print("\n🎉 种子数据初始化完成！")
-        print("\n登录凭据：")
-        print("  Super Admin:  admin / admin123")
-        print("  编剧部主管:   bianju_admin / bianju123")
-        print("  编剧部成员:   writer_zhang / writer123")
-        print("  编剧部成员:   writer_li / writer123")
-        print("  美术部主管:   art_admin / art123")
+        print("\n登录凭据（账号 = 密码）：")
+        print("  Super Admin:  admin")
+        print("  编剧部主管:   bianju")
 
 
 if __name__ == "__main__":

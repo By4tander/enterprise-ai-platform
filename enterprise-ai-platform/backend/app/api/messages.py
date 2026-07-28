@@ -40,15 +40,4 @@ async def get_messages(
     )
     messages = result.scalars().all()
 
-    return [
-        MessageOut(
-            id=m.id,
-            project_id=m.project_id,
-            sender_type=m.sender_type.value,
-            sender_name=m.sender_name,
-            content=m.content,
-            thinking_content=m.thinking_content,
-            timestamp=m.timestamp,
-        )
-        for m in messages
-    ]
+    return [MessageOut.from_orm_model(m) for m in messages]

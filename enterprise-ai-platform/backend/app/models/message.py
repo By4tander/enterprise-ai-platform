@@ -33,6 +33,8 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # thinking 过程内容（Agent 思考链，折叠展示用）
     thinking_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 附件元数据（JSON 数组：[{filename, size, stored_path, content_type}]）
+    attachments_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

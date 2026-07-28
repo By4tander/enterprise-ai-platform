@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import ProjectView from './pages/ProjectView'
 import SkillsHub from './pages/SkillsHub'
+import HermesGlobalSkills from './pages/HermesGlobalSkills'
 import ArchivedProjects from './pages/ArchivedProjects'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -17,26 +18,27 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function App() {
   const theme = useThemeStore((s) => s.theme)
   return (
-    <div className={theme}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <div className={theme}>
                 <MainLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="project/:projectId" element={<ProjectView />} />
-            <Route path="skills" element={<SkillsHub />} />
-            <Route path="archived" element={<ArchivedProjects />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+              </div>
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="project/:projectId" element={<ProjectView />} />
+          <Route path="skills" element={<SkillsHub />} />
+          <Route path="global-skills" element={<HermesGlobalSkills />} />
+          <Route path="archived" element={<ArchivedProjects />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
 

@@ -47,8 +47,8 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 mb-4">
             <Sparkles className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">企业AI智能工作台</h1>
-          <p className="text-sm text-gray-500 mt-2">多租户 AI 协作平台</p>
+          <h1 className="text-2xl font-bold text-white">智影<span className="text-indigo-400">·</span>AI智能工作平台</h1>
+          <p className="text-sm text-gray-400 mt-2">企业级 AI Agent 协作平台</p>
         </div>
 
         {/* Form */}
@@ -94,8 +94,8 @@ export default function Login() {
           </button>
 
           <div className="text-xs text-gray-600 text-center pt-2 border-t border-gray-800">
-            <p>测试账号：</p>
-            <p className="mt-1">admin / admin123 · bianju_admin / bianju123 · writer_zhang / writer123</p>
+            <p>测试账号（账号 = 密码）：</p>
+            <p className="mt-1">admin · bianju</p>
           </div>
         </form>
       </div>
