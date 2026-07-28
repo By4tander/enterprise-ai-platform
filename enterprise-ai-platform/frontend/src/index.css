@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background-color: #0a0b0d;
+  color: #e1e1e1;
+}
+
+/* ═══════════════════════════════════════════
+   DARK MODE (default — no class needed)
+   All Tailwind bg-gray-XXX / text-gray-XXX work as-is
+   ═══════════════════════════════════════════ */
+
+/* Scrollbar — dark */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #1a1a1b; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* Markdown — dark */
+.markdown-body h2 { font-size: 1.25rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #f0f0f0; border-bottom: 1px solid #2a2a2b; padding-bottom: 0.5rem; }
+.markdown-body h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.5rem; color: #e0e0e0; }
+.markdown-body p { margin-bottom: 0.75rem; line-height: 1.7; }
+.markdown-body ul, .markdown-body ol { margin-bottom: 0.75rem; padding-left: 1.5rem; }
+.markdown-body li { margin-bottom: 0.25rem; }
+.markdown-body code { background: #1e1e1e; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.875rem; color: #e879f9; }
+.markdown-body pre { background: #121212; border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; border: 1px solid #2a2a2b; }
+.markdown-body blockquote { border-left: 3px solid #3b82f6; padding-left: 1rem; margin: 0.75rem 0; color: #9ca3af; }
+.markdown-body strong { color: #fbbf24; font-weight: 600; }
+.markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.markdown-body th, .markdown-body td { padding: 0.5rem 0.75rem; border: 1px solid #2a2a2b; text-align: left; }
+.markdown-body th { background: #1a1a1b; font-weight: 600; }
+
+/* ═══════════════════════════════════════════
+   LIGHT MODE — activated when <div class="light"> wraps the app
+   Override all dark Tailwind classes with light equivalents
+   ═══════════════════════════════════════════ */
+
+/* Body */
+.light body, .light { background-color: #f8fafc; color: #1e293b; }
+
+/* Background containers — all gray shades → white/light gray */
+.light .bg-gray-950 { background-color: #f8fafc; }
+.light .bg-gray-950\/80 { background-color: #f8fafc; }
+.light .bg-gray-900 { background-color: #ffffff; }
+.light .bg-gray-900\/50 { background-color: #ffffff; }
+.light .bg-gray-900\/5 { background-color: #ffffff; }
+.light .bg-gray-800 { background-color: #f1f5f9; }
+.light .bg-gray-800\/50 { background-color: #f1f5f9; }
+.light .bg-gray-800\/80 { background-color: #f1f5f9; }
+.light .bg-gray-700 { background-color: #e2e8f0; }
+.light .bg-gray-700\/80 { background-color: #e2e8f0; }
+.light .bg-gray-700\/90 { background-color: #e2e8f0; }
+.light .bg-gray-700\/50 { background-color: #e2e8f0; }
+.light .bg-gray-600 { background-color: #cbd5e1; }
+.light .bg-black\/60 { background-color: rgba(0,0,0,0.3); }
+.light .bg-black\/70 { background-color: rgba(0,0,0,0.3); }
+
+/* Background: indigo-tinted containers */
+.light .bg-indigo-500\/10 { background-color: rgba(99,102,241,0.08); }
+.light .bg-blue-500\/10 { background-color: rgba(59,130,246,0.08); }
+.light .bg-blue-500\/20 { background-color: rgba(59,130,246,0.12); }
+.light .bg-blue-600\/20 { background-color: rgba(37,99,235,0.12); }
+.light .bg-blue-950\/30 { background-color: rgba(59,130,246,0.1); }
+.light .bg-amber-500\/20 { background-color: rgba(245,158,11,0.12); }
+.light .bg-amber-600\/10 { background-color: rgba(217,119,6,0.08); }
+.light .bg-green-500\/10 { background-color: rgba(34,197,94,0.08); }
+.light .bg-red-500\/10 { background-color: rgba(239,68,68,0.08); }
+.light .bg-purple-500\/5 { background-color: rgba(168,85,247,0.05); }
+.light .bg-purple-500\/10 { background-color: rgba(168,85,247,0.08); }
+.light .bg-purple-500\/20 { background-color: rgba(168,85,247,0.12); }
+.light .bg-indigo-600\/20 { background-color: rgba(79,70,229,0.12); }
+.light .bg-indigo-500\/10 { background-color: rgba(99,102,241,0.08); }
+
+/* Borders */
+.light .border-gray-800 { border-color: #e2e8f0; }
+.light .border-gray-700 { border-color: #e2e8f0; }
+.light .border-gray-600 { border-color: #cbd5e1; }
+
+/* Text — all gray shades → dark */
+.light .text-white { color: #0f172a; }
+.light .text-gray-100 { color: #1e293b; }
+.light .text-gray-200 { color: #334155; }
+.light .text-gray-300 { color: #475569; }
+.light .text-gray-400 { color: #64748b; }
+.light .text-gray-500 { color: #94a3b8; }
+.light .text-gray-600 { color: #94a3b8; }
+.light .text-gray-700 { color: #334155; }
+/* For section headers in light mode */
+.light .text-gray-400.uppercase { color: #64748b; }
+
+/* Keep white text on colored/gradient backgrounds */
+.light .bg-indigo-600 .text-white,
+.light .bg-blue-600 .text-white,
+.light .bg-blue-700 .text-white,
+.light .bg-red-600 .text-white,
+.light .bg-green-600 .text-white,
+.light .bg-purple-600 .text-white,
+.light .bg-indigo-500 .text-white,
+.light .bg-pink-600 .text-white,
+.light [class*="from-blue-"] .text-white,
+.light [class*="to-purple-"] .text-white,
+.light [class*="from-indigo-"] .text-white { color: #ffffff; }
+
+/* Hover states */
+.light .hover\:bg-gray-800:hover { background-color: #f1f5f9; }
+.light .hover\:bg-gray-800\/80:hover { background-color: #f1f5f9; }
+.light .hover\:bg-gray-800\/50:hover { background-color: #f1f5f9; }
+.light .hover\:bg-gray-700:hover { background-color: #e2e8f0; }
+.light .hover\:bg-gray-600:hover { background-color: #cbd5e1; }
+.light .hover\:text-white:hover { color: #0f172a; }
+.light .hover\:text-gray-200:hover { color: #1e293b; }
+.light .hover\:text-gray-400:hover { color: #475569; }
+.light .hover\:border-gray-500:hover { border-color: #94a3b8; }
+.light .hover\:border-gray-600:hover { border-color: #64748b; }
+
+/* Placeholder */
+.light .placeholder-gray-600::placeholder { color: #cbd5e1; }
+
+/* Focus rings — stay vibrant */
+.light .focus\:ring-2:focus { --tw-ring-color: rgba(99,102,241,0.5); }
+
+/* Gradient backgrounds → solid light */
+.light .bg-gradient-to-br { background-image: none; }
+.light .from-gray-900 { --tw-gradient-from: #f1f5f9; }
+.light .to-gray-800 { --tw-gradient-to: #e2e8f0; }
+.light .from-gray-900\/50 { --tw-gradient-from: #f8fafc; }
+
+/* Markdown — light */
+.light .markdown-body h2 { color: #1e293b; border-bottom-color: #e2e8f0; }
+.light .markdown-body h3 { color: #334155; }
+.light .markdown-body code { background: #f1f5f9; color: #a855f7; }
+.light .markdown-body pre { background: #f8fafc; border-color: #e2e8f0; }
+.light .markdown-body blockquote { color: #64748b; }
+.light .markdown-body strong { color: #d97706; }
+.light .markdown-body th, .light .markdown-body td { border-color: #e2e8f0; }
+.light .markdown-body th { background: #f1f5f9; }
+
+/* Scrollbar — light */
+.light ::-webkit-scrollbar-track { background: #f1f5f9; }
+.light ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+.light ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Chat input — dark bg in light mode → white */
+.light input.bg-gray-800,
+.light textarea.bg-gray-800 { background: #ffffff; border-color: #e2e8f0; color: #334155; }
+
+/* Light mode: text badge colors — keep them visible */
+.light .text-blue-300 { color: #2563eb; }
+.light .text-indigo-300 { color: #4f46e5; }
+.light .text-green-300 { color: #16a34a; }
+.light .text-amber-300 { color: #d97706; }
+.light .text-purple-300 { color: #9333ea; }
+.light .text-red-300 { color: #dc2626; }
+.light .text-pink-300 { color: #db2777; }
+.light .text-fuchsia-300 { color: #c026d3; }
+.light .text-orange-300 { color: #ea580c; }
+.light .text-cyan-300 { color: #0891b2; }
+.light .text-sky-300 { color: #0284c7; }
+.light .text-yellow-300 { color: #ca8a04; }
+.light .text-violet-300 { color: #7c3aed; }
+.light .text-gray-300 { color: #475569; }
+
+/* Animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.typing-dot { animation: pulse-dot 1.4s infinite both; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
