@@ -182,15 +182,29 @@ class HermesCLIBridge:
                 prompt,
             ]
 
-            # 附件透传：将文件路径作为上下文注入
+            # 附件透传：读取文件内容并注入到上下文
             process_env_extra = {}
             if file_paths:
-                file_context = "\n".join(f"[附件文件: {fp}]" for fp in file_paths)
+                file_context_parts = []
+                for fp in file_paths:
+                    try:
+                        if os.path.isfile(fp):
+                            with open(fp, 'r', encoding='utf-8', errors='replace') as f:
+                                content = f.read()
+                            # 限制单个文件最大 500KB，超过则截断
+                            if len(content) > 500000:
+                                content = content[:500000] + f"\n... (文件共 {len(content)//1024}KB，已截取前 500KB)"
+                            file_context_parts.append(f"[附件文件: {fp}]\n{content}")
+                        else:
+                            file_context_parts.append(f"[附件文件: {fp}] (文件不存在)")
+                    except Exception as e:
+                        file_context_parts.append(f"[附件文件: {fp}] (读取失败: {e})")
+                file_context = "\n\n".join(file_context_parts)
                 process_env_extra = {"HERMES_ATTACHED_FILES": ",".join(file_paths)}
                 if system_prompt:
-                    system_prompt = f"{system_prompt}\n\n## 附件文件\n{file_context}"
+                    system_prompt = f"{system_prompt}\n\n## 附件文件内容\n{file_context}"
                 else:
-                    system_prompt = f"## 附件文件\n{file_context}"
+                    system_prompt = f"## 附件文件内容\n{file_context}"
 
             # 构建进程环境 — 三层修复解决流式输出阻塞
             process_env = os.environ.copy()

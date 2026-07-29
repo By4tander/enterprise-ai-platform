@@ -22,18 +22,27 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #555; }
 
 /* Markdown — dark */
+.markdown-body h1 { font-size: 1.5rem; font-weight: 700; margin-top: 1.75rem; margin-bottom: 1rem; color: #f0f0f0; border-bottom: 1px solid #2a2a2b; padding-bottom: 0.5rem; }
 .markdown-body h2 { font-size: 1.25rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #f0f0f0; border-bottom: 1px solid #2a2a2b; padding-bottom: 0.5rem; }
 .markdown-body h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.5rem; color: #e0e0e0; }
-.markdown-body p { margin-bottom: 0.75rem; line-height: 1.7; }
+.markdown-body h4 { font-size: 1rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; color: #d0d0d0; }
+.markdown-body p { margin-bottom: 0.75rem; line-height: 1.7; color: #c9d1d9; }
 .markdown-body ul, .markdown-body ol { margin-bottom: 0.75rem; padding-left: 1.5rem; }
-.markdown-body li { margin-bottom: 0.25rem; }
-.markdown-body code { background: #1e1e1e; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.875rem; color: #e879f9; }
+.markdown-body li { margin-bottom: 0.35rem; line-height: 1.6; }
+.markdown-body li > ul, .markdown-body li > ol { margin-top: 0.35rem; margin-bottom: 0; }
+.markdown-body code { background: #1e1e1e; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; color: #e879f9; font-family: 'SF Mono', 'Fira Code', monospace; }
 .markdown-body pre { background: #121212; border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; border: 1px solid #2a2a2b; }
-.markdown-body blockquote { border-left: 3px solid #3b82f6; padding-left: 1rem; margin: 0.75rem 0; color: #9ca3af; }
+.markdown-body pre code { background: transparent; padding: 0; color: #c9d1d9; font-size: 0.85rem; }
+.markdown-body blockquote { border-left: 3px solid #3b82f6; padding-left: 1rem; margin: 0.75rem 0; color: #9ca3af; font-style: italic; }
 .markdown-body strong { color: #fbbf24; font-weight: 600; }
+.markdown-body em { color: #a5b4fc; }
+.markdown-body a { color: #60a5fa; text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid #2a2a2b; margin: 1.5rem 0; }
 .markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .markdown-body th, .markdown-body td { padding: 0.5rem 0.75rem; border: 1px solid #2a2a2b; text-align: left; }
 .markdown-body th { background: #1a1a1b; font-weight: 600; }
+.markdown-body img { max-width: 100%; border-radius: 8px; margin: 0.75rem 0; }
 
 /* ═══════════════════════════════════════════
    LIGHT MODE — activated when <div class="light"> wraps the app
@@ -69,6 +78,8 @@ body {
 .light .bg-amber-500\/20 { background-color: rgba(245,158,11,0.12); }
 .light .bg-amber-600\/10 { background-color: rgba(217,119,6,0.08); }
 .light .bg-green-500\/10 { background-color: rgba(34,197,94,0.08); }
+.light .bg-green-500\/15 { background-color: rgba(34,197,94,0.1); }
+.light .bg-blue-500\/15 { background-color: rgba(59,130,246,0.1); }
 .light .bg-red-500\/10 { background-color: rgba(239,68,68,0.08); }
 .light .bg-purple-500\/5 { background-color: rgba(168,85,247,0.05); }
 .light .bg-purple-500\/10 { background-color: rgba(168,85,247,0.08); }
@@ -79,6 +90,8 @@ body {
 /* Borders */
 .light .border-gray-800 { border-color: #e2e8f0; }
 .light .border-gray-700 { border-color: #e2e8f0; }
+.light .border-green-500\/30 { border-color: rgba(34,197,94,0.3); }
+.light .border-blue-500\/30 { border-color: rgba(59,130,246,0.3); }
 .light .border-gray-600 { border-color: #cbd5e1; }
 
 /* Text — all gray shades → dark */
@@ -149,12 +162,20 @@ body {
 .light .from-gray-900\/50 { --tw-gradient-from: #f8fafc; }
 
 /* Markdown — light */
+.light .markdown-body h1 { color: #0f172a; border-bottom-color: #e2e8f0; }
 .light .markdown-body h2 { color: #1e293b; border-bottom-color: #e2e8f0; }
 .light .markdown-body h3 { color: #334155; }
+.light .markdown-body h4 { color: #475569; }
+.light .markdown-body p { color: #334155; }
+.light .markdown-body li { color: #334155; }
 .light .markdown-body code { background: #f1f5f9; color: #a855f7; }
 .light .markdown-body pre { background: #f8fafc; border-color: #e2e8f0; }
+.light .markdown-body pre code { color: #334155; }
 .light .markdown-body blockquote { color: #64748b; }
 .light .markdown-body strong { color: #d97706; }
+.light .markdown-body em { color: #6366f1; }
+.light .markdown-body a { color: #2563eb; }
+.light .markdown-body hr { border-top-color: #e2e8f0; }
 .light .markdown-body th, .light .markdown-body td { border-color: #e2e8f0; }
 .light .markdown-body th { background: #f1f5f9; }
 

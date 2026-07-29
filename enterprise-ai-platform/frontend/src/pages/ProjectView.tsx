@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, chatStream } from '../services/api'
+import { useAuthStore } from '../store'
 import { useProjectSkills, skillSourceColor, extractHistorySkills } from '../hooks/useProjectSkills'
 import ChatInput from '../components/chat/ChatInput'
 import {
@@ -12,7 +13,7 @@ import {
   Loader2, Bot, User, Sparkles, AlertCircle, Copy, X, Zap,
   Activity, Cpu, Clock, BarChart3, Wrench, Brain, Pause, Play,
   FolderOpen, Grid3X3, List, Folder, File, FolderTree, ExternalLink, Check,
-  Search, Plus, XCircle, Info, Paperclip, GripVertical, Pencil, Square, ArrowUp
+  Search, Plus, XCircle, Info, Paperclip, GripVertical, Pencil, Square, ArrowUp, FolderInput, RefreshCw
 } from 'lucide-react'
 
 interface MessageAttachment {
@@ -280,6 +281,7 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
 
 export default function ProjectView() {
   const { projectId } = useParams<{ projectId: string }>()
+  const currentUser = useAuthStore((s) => s.user)
   const [project, setProject] = useState<any>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -289,7 +291,7 @@ export default function ProjectView() {
   const [input, setInput] = useState('')
   // Per-project input isolation — persists unsent text when switching projects
   const inputRef = useRef('')
-  const inputCacheRef = useRef<Record<string, string>>({})
+  const inputCacheRef = useRef<Record<string, string>>({}) // deprecated, using localStorage
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -302,20 +304,39 @@ export default function ProjectView() {
   const [hermesStatus, setHermesStatus] = useState<HermesStatus>({
     model: '--', provider: '--', tokensUsed: 0, inputTokens: 0, outputTokens: 0, elapsed: 0, status: '空闲'
   })
+  const [hasMoreMessages, setHasMoreMessages] = useState(false)
+  const [totalMessages, setTotalMessages] = useState(0)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [paused, setPaused] = useState(false)
+  // ── 连接健康状态 ──
+  const [connectionHealth, setConnectionHealth] = useState<'idle' | 'connected' | 'stale' | 'timeout' | 'error'>('idle')
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   // ── 项目协作锁定 ──
   const [lockState, setLockState] = useState<LockState>({ locked: false, is_me: false, is_admin: false })
   const [showTransferModal, setShowTransferModal] = useState(false)
   const [showIncomingRequest, setShowIncomingRequest] = useState<TransferRequestItem | null>(null)
   const [transferStatus, setTransferStatus] = useState<string | null>(null)
   const lockPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  // ── 项目文件浏览器 ──
+  // ── 工作流文件浏览器 ──
   const [projectFiles, setProjectFiles] = useState<any[]>([])
   const [fileTree, setFileTree] = useState<any[]>([])
   const [fileViewMode, setFileViewMode] = useState<'list' | 'icon'>('list')
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set(['']))
   // ── 图标视图导航 ──
   const [iconViewPath, setIconViewPath] = useState<string[]>([])
+  // ── 外部文件夹标签 ──
+  interface ExternalFolderTab {
+    id: string
+    name: string
+    path: string
+    tree: any[]
+    expanded: Set<string>
+    loading: boolean
+    error: string
+  }
+  const [externalTabs, setExternalTabs] = useState<ExternalFolderTab[]>([])
+  const [activeFileTab, setActiveFileTab] = useState<'project' | string>('project')
+  const pickerLockRef = useRef(false)
   // ── 部门技能展开 ──
   const [expandedDeptSkill, setExpandedDeptSkill] = useState<string | null>(null)
   const [detailDeptSkill, setDetailDeptSkill] = useState<any | null>(null)
@@ -328,6 +349,7 @@ export default function ProjectView() {
   const [taskQueue, setTaskQueue] = useState<QueuedTask[]>([])
   const [dragOverQueueIdx, setDragOverQueueIdx] = useState<number | null>(null)
   const queueDragRef = useRef<{ idx: number; startY: number } | null>(null)
+  const autoSendPendingRef = useRef(false)
   // ── 产出物文件类型筛选 ──
   const [artifactTypeFilter, setArtifactTypeFilter] = useState<Set<string>>(new Set())  // empty = show all
   // ── 右键菜单 ──
@@ -358,28 +380,25 @@ export default function ProjectView() {
     }
   }, [streamContent, streamThinking, streaming])
 
-  // ── 项目切换时：终止旧项目流式 + 重置所有 UI 状态 ──
+  // ── 项目切换时：保留后台流式 + 重置 UI 状态 ──
   useEffect(() => {
-    // 1. 终止旧项目中仍在运行的 SSE 流
-    if (streamAbortRef.current) {
-      streamAbortRef.current.abort()
-      streamAbortRef.current = null
-    }
+    // 注意：不终止 SSE 流！让后台继续完成，完成后消息会自动保存到 DB
+    // 下次 loadData 时会从 DB 加载完整消息
 
-    // 2. 重置流式相关状态（防止旧项目的思考/回复在新项目中显示）
+    // 重置流式相关状态（防止旧项目的思考/回复在新项目中显示）
     setStreaming(false)
     setStreamContent('')
     setStreamThinking('')
     streamContentRef.current = ''
     streamThinkingRef.current = ''
 
-    // 3. 重置 Hermes 状态栏
-    setHermesStatus({
-      model: '--', provider: '--', tokensUsed: 0,
+    // 重置 Hermes 状态栏（保留 token 累计）
+    setHermesStatus(prev => ({
+      model: '--', provider: '--', tokensUsed: prev.tokensUsed,
       inputTokens: 0, outputTokens: 0, elapsed: 0, status: '空闲'
-    })
+    }))
 
-    // 4. 重置交互状态（技能激活、暂停、菜单等）
+    // 重置交互状态（技能激活、暂停、菜单等）
     setActiveSkillIds(new Set())
     setPaused(false)
     setShowMention(false)
@@ -391,15 +410,27 @@ export default function ProjectView() {
     setSkillUsageCounts({})
   }, [projectId])
 
-  // ── Per-project input isolation: save before switching, restore on mount ──
+  // ── Per-project input isolation: save/restore via localStorage ──
+  const INPUT_CACHE_KEY = 'input_cache'
+  const getInputCache = (): Record<string, string> => {
+    try { return JSON.parse(localStorage.getItem(INPUT_CACHE_KEY) || '{}') } catch { return {} }
+  }
+  const saveInputCache = (pid: string, value: string) => {
+    const cache = getInputCache()
+    if (value) cache[pid] = value; else delete cache[pid]
+    localStorage.setItem(INPUT_CACHE_KEY, JSON.stringify(cache))
+  }
+
   useEffect(() => {
-    // Restore cached input for this project (or empty if first visit)
-    setInput(inputCacheRef.current[projectId || ''] || '')
-    inputRef.current = inputCacheRef.current[projectId || ''] || ''
+    // Restore cached input for this project
+    const cache = getInputCache()
+    const saved = cache[projectId || ''] || ''
+    setInput(saved)
+    inputRef.current = saved
     return () => {
       // Save current input when leaving this project
-      if (projectId) {
-        inputCacheRef.current[projectId] = inputRef.current
+      if (projectId && inputRef.current) {
+        saveInputCache(projectId, inputRef.current)
       }
     }
   }, [projectId])
@@ -418,7 +449,15 @@ export default function ProjectView() {
         api.getProjectFiles(projectId).catch(() => ({ files: [] })),
       ])
       setProject(proj)
-      setMessages(msgs)
+      // 处理消息响应（支持新格式和旧格式）
+      const msgData = msgs?.messages || msgs
+      const msgList = Array.isArray(msgData) ? msgData : []
+      setMessages(msgList)
+      setHasMoreMessages(msgs?.has_more || false)
+      setTotalMessages(msgs?.total || msgList.length)
+      // 从消息历史中累计 token 总数
+      const totalTokens = msgList.reduce((sum: number, m: any) => sum + (m.tokens_used || 0), 0)
+      setHermesStatus(prev => ({ ...prev, tokensUsed: totalTokens }))
       setArtifacts(arts)
       setProjectFiles(pfiles?.files || [])
       setFileTree(pfiles?.tree || [])
@@ -436,6 +475,53 @@ export default function ProjectView() {
   }, [projectId])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // ── 检测是否有后台流完成后需要刷新消息 ──
+  useEffect(() => {
+    if (!projectId) return
+    const streamKey = `active_stream_${projectId}`
+    const checkAndReload = () => {
+      if (localStorage.getItem(streamKey) === '1') {
+        // 有活跃流在后台运行，定期检查是否完成
+        const poll = setInterval(() => {
+          if (localStorage.getItem(streamKey) !== '1') {
+            // 流已完成，重新加载消息
+            clearInterval(poll)
+            loadData()
+          }
+        }, 2000)
+        return () => clearInterval(poll)
+      }
+    }
+    return checkAndReload()
+  }, [projectId])
+
+  // ── 自动刷新右侧文件和产出物（每 15 秒） ──
+  const refreshFiles = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const [pfiles, arts] = await Promise.all([
+        api.getProjectFiles(projectId).catch(() => null),
+        api.getArtifacts(projectId).catch(() => null),
+      ])
+      if (pfiles) {
+        setProjectFiles(pfiles.files || [])
+        setFileTree(pfiles.tree || [])
+      }
+      if (arts) setArtifacts(arts)
+    } catch {}
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) return
+    const interval = setInterval(refreshFiles, 15000)
+    return () => clearInterval(interval)
+  }, [projectId, refreshFiles])
+
+  // ── 预热 osascript 运行时（减少首次打开文件夹选择器的延迟） ──
+  useEffect(() => {
+    fetch(`http://${window.location.hostname}:8000/api/files/warmup-picker`, { method: 'POST' }).catch(() => {})
+  }, [])
   useEffect(() => { scrollToBottom() }, [messages, streamContent])
 
   // ── 项目锁定：进入项目时获取锁，离开时释放 ──
@@ -493,10 +579,32 @@ export default function ProjectView() {
   // 项目历史技能：从消息中提取 @skill_name 标签
   const projectHistorySkills = useMemo(() => extractHistorySkills(messages), [messages])
 
+  // ── 自动发送队列中的下一个任务 ──
+  // 当 streaming 从 true→false 且有待发送标记时，自动执行队列第一项
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!streaming && autoSendPendingRef.current) {
+      autoSendPendingRef.current = false
+      const timer = setTimeout(() => {
+        setTaskQueue(prev => {
+          if (prev.length === 0) return prev
+          const [next, ...rest] = prev
+          setTimeout(() => {
+            setInput('')
+            inputRef.current = ''
+            if (projectId) saveInputCache(projectId, '')
+            executeTask(next.content, next.files)
+          }, 100)
+          return rest
+        })
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [streaming])
+
   // ── 执行单个任务（核心逻辑） ──
   const executeTask = async (text: string, files?: any[]) => {
     if ((!text && (!files || files.length === 0)) || !projectId) return
-    // 权限检查：只读模式或归档项目禁止发送
     if (project?.status !== 'active' || (lockState.locked && !lockState.is_me && !lockState.is_admin)) return
     const content = text || '请分析附件文件'
     setStreaming(true)
@@ -505,7 +613,7 @@ export default function ProjectView() {
     setShowThinking(true)
     streamContentRef.current = ''
     streamThinkingRef.current = ''
-    setHermesStatus({ model: '--', provider: '--', tokensUsed: 0, inputTokens: 0, outputTokens: 0, elapsed: 0, status: '启动中...' })
+    setHermesStatus(prev => ({ model: '--', provider: '--', tokensUsed: prev.tokensUsed, inputTokens: 0, outputTokens: 0, elapsed: 0, status: '启动中...' }))
 
     let fullContent = content
     const activeSkills = skills.filter(s => activeSkillIds.has(s.id))
@@ -536,6 +644,13 @@ export default function ProjectView() {
     }
     setMessages((prev) => [...prev, userMsg])
 
+    setConnectionHealth('connected')
+    setConnectionError(null)
+
+    // 标记该项目有活跃流（用于切回时自动刷新）
+    const streamKey = `active_stream_${projectId}`
+    localStorage.setItem(streamKey, '1')
+
     const controller = chatStream(projectId, fullContent, {
       onStatus: (msg) => {
         setHermesStatus(prev => ({ ...prev, status: msg }))
@@ -543,16 +658,22 @@ export default function ProjectView() {
       onContext: (data) => {
         try {
           const ctx = JSON.parse(data)
-          setHermesStatus(prev => ({
-            ...prev,
-            model: ctx.model || prev.model,
-            provider: ctx.provider || prev.provider,
-            tokensUsed: ctx.tokens_used || prev.tokensUsed,
-            inputTokens: ctx.input_tokens || prev.inputTokens,
-            outputTokens: ctx.output_tokens || prev.outputTokens,
-            elapsed: ctx.elapsed_seconds || prev.elapsed,
-            status: ctx.elapsed_seconds > 0 ? '完成' : '推理中...',
-          }))
+          setHermesStatus(prev => {
+            // 对话完成时（elapsed_seconds > 0），累加 token 到总数
+            const newTokens = ctx.elapsed_seconds > 0 && ctx.tokens_used > 0
+              ? prev.tokensUsed + ctx.tokens_used
+              : prev.tokensUsed
+            return {
+              ...prev,
+              model: ctx.model || prev.model,
+              provider: ctx.provider || prev.provider,
+              tokensUsed: newTokens,
+              inputTokens: ctx.input_tokens || prev.inputTokens,
+              outputTokens: ctx.output_tokens || prev.outputTokens,
+              elapsed: ctx.elapsed_seconds || prev.elapsed,
+              status: ctx.elapsed_seconds > 0 ? '完成' : '推理中...',
+            }
+          })
         } catch {}
       },
       onContent: (chunk) => {
@@ -587,32 +708,27 @@ export default function ProjectView() {
         streamContentRef.current = ''
         streamThinkingRef.current = ''
         setHermesStatus(prev => ({ ...prev, status: '空闲', elapsed: 0 }))
+        // 清除活跃流标记
+        if (projectId) localStorage.removeItem(`active_stream_${projectId}`)
         // Silently refresh artifacts in background
         setTimeout(() => {
           if (!projectId) return
           api.getArtifacts(projectId).then(setArtifacts).catch(() => {})
         }, 500)
-        // ── Auto-send next queued task ──
-        setTimeout(() => {
-          setTaskQueue(prev => {
-            if (prev.length === 0) return prev
-            const [next, ...rest] = prev
-            // Execute the next task (defer to avoid state batching issues)
-            setTimeout(() => {
-              setInput('')
-              inputRef.current = ''
-              if (projectId) inputCacheRef.current[projectId] = ''
-              executeTask(next.content, next.files)
-            }, 100)
-            return rest
-          })
-        }, 300)
+        // ── 标记待自动发送（由 useEffect 处理） ──
+        autoSendPendingRef.current = true
       },
       onError: (err) => {
         streamContentRef.current += `\n\n> ⚠️ 错误: ${err}`
         setStreamContent((prev) => prev + `\n\n> ⚠️ 错误: ${err}`)
         setStreaming(false)
+        setConnectionHealth('error')
+        setConnectionError(err)
+        if (projectId) localStorage.removeItem(`active_stream_${projectId}`)
         setHermesStatus(prev => ({ ...prev, status: '错误' }))
+      },
+      onHealthChange: (status) => {
+        setConnectionHealth(status)
       },
     }, filePaths, attachmentMeta.length > 0 ? attachmentMeta : undefined)
     streamAbortRef.current = controller
@@ -634,13 +750,13 @@ export default function ProjectView() {
       setTaskQueue(prev => [...prev, queued])
       setInput('')
       inputRef.current = ''
-      if (projectId) inputCacheRef.current[projectId] = ''
+      if (projectId) saveInputCache(projectId, '')
       return
     }
     // 空闲状态 → 直接执行
     setInput('')
     inputRef.current = ''
-    if (projectId) inputCacheRef.current[projectId] = ''
+    if (projectId) saveInputCache(projectId, '')
     executeTask(text, files)
   }
 
@@ -659,16 +775,21 @@ export default function ProjectView() {
   }
 
   const editQueuedTask = (task: QueuedTask) => {
-    // 移回输入栏
-    setInput(task.content)
-    inputRef.current = task.content
-    if (projectId) inputCacheRef.current[projectId] = task.content
+    // 1. 先从队列中移除
     setTaskQueue(prev => prev.filter(t => t.id !== task.id))
-    // Focus textarea
+    // 2. 将内容放回输入框（延迟确保 DOM 已更新）
     setTimeout(() => {
-      const textarea = document.querySelector('textarea')
-      textarea?.focus()
-      textarea?.setSelectionRange(task.content.length, task.content.length)
+      setInput(task.content)
+      inputRef.current = task.content
+      if (projectId) saveInputCache(projectId, task.content)
+      // 3. 聚焦输入框
+      setTimeout(() => {
+        const textarea = document.querySelector('textarea')
+        if (textarea) {
+          textarea.focus()
+          textarea.setSelectionRange(task.content.length, task.content.length)
+        }
+      }, 100)
     }, 50)
   }
 
@@ -681,14 +802,106 @@ export default function ProjectView() {
     })
   }
 
+  // ── 外部文件夹管理（含状态持久化） ──
+  const EXT_TABS_KEY = `extTabs_${projectId}`
+
+  // 持久化：保存外部标签路径到 localStorage
+  const persistExtTabs = useCallback((tabs: ExternalFolderTab[]) => {
+    if (!projectId) return
+    const paths = tabs.map(t => ({ path: t.path, name: t.name }))
+    try { localStorage.setItem(EXT_TABS_KEY, JSON.stringify(paths)) } catch {}
+  }, [projectId])
+
+  // 恢复：从 localStorage 加载外部标签
+  useEffect(() => {
+    if (!projectId) return
+    try {
+      const saved = localStorage.getItem(EXT_TABS_KEY)
+      if (saved) {
+        const paths: { path: string; name: string }[] = JSON.parse(saved)
+        if (paths.length > 0) {
+          // 重新加载每个文件夹
+          paths.forEach(p => openExternalFolder(p.path, false))
+        }
+      }
+    } catch {}
+  }, [projectId])
+
+  const openExternalFolder = async (folderPath: string, shouldPersist = true) => {
+    if (!folderPath) return
+    const existing = externalTabs.find(t => t.path === folderPath)
+    if (existing) { setActiveFileTab(existing.id); return }
+    const tabId = `ext-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`
+    const folderName = folderPath.split('/').filter(Boolean).pop() || folderPath
+    const newTab: ExternalFolderTab = {
+      id: tabId, name: folderName, path: folderPath,
+      tree: [], expanded: new Set(['']), loading: true, error: ''
+    }
+    setExternalTabs(prev => {
+      const next = [...prev, newTab]
+      if (shouldPersist) persistExtTabs(next)
+      return next
+    })
+    setActiveFileTab(tabId)
+    try {
+      const res = await api.browseFolder(folderPath) as any
+      const tree = res.tree || []
+      setExternalTabs(prev => {
+        const next = prev.map(t => t.id === tabId ? { ...t, tree, loading: false } : t)
+        return next
+      })
+    } catch (e: any) {
+      setExternalTabs(prev => {
+        const next = prev.map(t => t.id === tabId ? { ...t, loading: false, error: e.message || '加载失败' } : t)
+        return next
+      })
+    }
+  }
+
+  const closeExternalTab = (tabId: string) => {
+    setExternalTabs(prev => {
+      const next = prev.filter(t => t.id !== tabId)
+      persistExtTabs(next)
+      return next
+    })
+    if (activeFileTab === tabId) setActiveFileTab('project')
+  }
+
+  const handleOpenFolder = async () => {
+    if (pickerLockRef.current) return
+    pickerLockRef.current = true
+    setTimeout(() => { pickerLockRef.current = false }, 2000)
+    try {
+      const res = await api.pickFolder() as any
+      if (res && !res.cancelled && res.path) {
+        openExternalFolder(res.path.trim())
+      }
+    } catch (e: any) {
+      console.warn('文件夹选择失败:', e.message)
+    }
+  }
+
+  // Toggle expand for external tab folders
+  const toggleExternalExpand = (tabId: string, path: string) => {
+    setExternalTabs(prev => prev.map(t => {
+      if (t.id !== tabId) return t
+      const next = new Set(t.expanded)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return { ...t, expanded: next }
+    }))
+  }
+
   const handlePause = handleStop
 
   const handleArchive = async () => {
     if (!projectId) return
-    if (!confirm('确定要结案归档此项目吗？归档后将自动触发技能提炼流水线。')) return
+    if (!confirm('确定要结案归档此工作流吗？归档后将自动触发技能提炼流水线。')) return
     try {
       await api.archiveProject(projectId)
-      alert('项目已归档！提炼的技能已存入部门技能库，待管理员审核。')
+      // 通知侧边栏刷新项目列表
+      window.dispatchEvent(new CustomEvent('project-archived', { detail: { projectId } }))
+      alert('工作流已归档！提炼的技能已存入部门技能库，待管理员审核。')
       loadData()
     } catch (e: any) {
       alert(e.message)
@@ -735,9 +948,13 @@ export default function ProjectView() {
     }
   }, [contextMenu])
 
-  // ── 页面级拖放（全局检测，整个页面任何位置均可拖入文件） ──
+  // ── 页面级拖放（仅响应外部文件拖入，忽略内部拖拽如队列排序） ──
   const handleGlobalDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation()
+    // 只有拖入的是外部文件（Files 类型）才显示覆盖层
+    // 内部拖拽（队列排序、侧栏文件等）只有 text/plain 或 text/project-id
+    const types = Array.from(e.dataTransfer.types || [])
+    if (!types.includes('Files')) return
     if (dragTimeoutRef.current) { clearTimeout(dragTimeoutRef.current); dragTimeoutRef.current = null }
     setGlobalDragOver(true)
   }, [])
@@ -748,6 +965,9 @@ export default function ProjectView() {
   const handleGlobalDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation()
     setGlobalDragOver(false)
+    // 只处理外部文件拖入
+    const types = Array.from(e.dataTransfer.types || [])
+    if (!types.includes('Files')) return
     const dropped = e.dataTransfer.files
     if (dropped && dropped.length > 0) {
       window.dispatchEvent(new CustomEvent('global-drop', { detail: Array.from(dropped) }))
@@ -948,29 +1168,34 @@ export default function ProjectView() {
         <div className="shrink-0 px-6 py-1.5 border-b border-gray-800 bg-gray-950/80 flex items-center gap-4 text-[11px]">
           <div className="flex items-center gap-1.5">
             <Cpu className="w-3 h-3 text-gray-400" />
-            <span className="text-gray-200 font-mono font-medium">{hermesStatus.model}</span>
-            <span className="text-gray-400">·</span>
-            <span className="text-gray-300">{hermesStatus.provider}</span>
+            <span className="text-gray-200 font-mono font-medium">{hermesStatus.model || 'Hermes'}</span>
+            {hermesStatus.provider && hermesStatus.provider !== '--' && (
+              <span className="text-gray-500">· {hermesStatus.provider}</span>
+            )}
           </div>
-          <div className="flex items-center gap-1.5 text-gray-300">
+          <div className="flex items-center gap-1.5 text-gray-400">
             <BarChart3 className="w-3 h-3" />
-            <span>{hermesStatus.inputTokens?.toLocaleString() || 0}↑</span>
-            <span className="text-gray-400">/</span>
-            <span>{hermesStatus.outputTokens?.toLocaleString() || 0}↓</span>
-            <span className="text-gray-400">|</span>
-            <span>{(hermesStatus.tokensUsed || 0).toLocaleString()} tok</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-gray-300">
-            <Clock className="w-3 h-3" />
-            <span>{hermesStatus.elapsed > 0 ? `${hermesStatus.elapsed.toFixed(1)}s` : '--'}</span>
+            <span>{(hermesStatus.tokensUsed || 0).toLocaleString()} tokens</span>
           </div>
           <div className="flex items-center gap-1.5">
             <Activity className={`w-3 h-3 ${streaming ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
             <span className={streaming ? 'text-green-400 font-medium' : 'text-gray-300'}>{hermesStatus.status}</span>
           </div>
-          {streaming && (
-            <button onClick={handlePause} className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">
-              <Pause className="w-3 h-3" />暂停
+          {/* 连接健康状态指示器 */}
+          {streaming && connectionHealth === 'stale' && (
+            <span className="flex items-center gap-1 text-[10px] text-amber-400 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              响应较慢...
+            </span>
+          )}
+          {connectionHealth === 'error' && connectionError && (
+            <button
+              onClick={() => { setConnectionHealth('idle'); setConnectionError(null) }}
+              className="flex items-center gap-1 text-[10px] text-red-400 hover:text-red-300 transition-colors"
+              title="点击清除错误"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              连接异常
             </button>
           )}
           <div className="ml-auto text-gray-400">Hermes Agent v0.19.0</div>
@@ -978,6 +1203,33 @@ export default function ProjectView() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* 加载更早消息 */}
+          {hasMoreMessages && (
+            <div className="flex flex-col items-center gap-2 py-3">
+              <p className="text-[11px] text-gray-500">
+                共 {totalMessages} 条消息，当前显示最新 {messages.length} 条
+              </p>
+              <button
+                onClick={async () => {
+                  if (loadingOlder || !projectId) return
+                  setLoadingOlder(true)
+                  try {
+                    const olderOffset = totalMessages - messages.length - 200
+                    const res = await api.getMessagesWithOffset(projectId, Math.max(0, olderOffset), 200)
+                    const olderMsgs = res.messages || []
+                    if (olderMsgs.length > 0) {
+                      setMessages(prev => [...olderMsgs, ...prev])
+                      setHasMoreMessages(res.has_more)
+                    }
+                  } catch {} finally { setLoadingOlder(false) }
+                }}
+                disabled={loadingOlder}
+                className="text-xs px-4 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-300 border border-gray-700 transition-colors disabled:opacity-50"
+              >
+                {loadingOlder ? '加载中...' : '加载更早的消息'}
+              </button>
+            </div>
+          )}
           {messages.length === 0 && !streaming && (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
               <Bot className="w-12 h-12 mb-3 text-gray-500" />
@@ -987,19 +1239,22 @@ export default function ProjectView() {
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-3 ${msg.sender_type === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.sender_type === 'agent' && (
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0 mt-1">
-                  <Sparkles className="w-4 h-4 text-white" />
+          {messages.map((msg) => {
+            const isAgent = msg.sender_type === 'agent'
+            return (
+            <div key={msg.id} className={`flex gap-3 ${isAgent ? 'justify-start' : 'justify-end'}`}>
+              {/* Agent 头像 — 始终在左侧 */}
+              {isAgent && (
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6, #9333ea)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 4 }}>
+                  <span style={{ color: 'white', fontSize: 14, fontWeight: 700 }}>H</span>
                 </div>
               )}
 
-              <div className={`max-w-[75%] ${msg.sender_type === 'user' ? 'order-first' : ''}`}>
+              <div className={`max-w-[75%] ${isAgent ? '' : 'order-first'}`}>
                 <div className={`flex items-center gap-2 mb-1 ${msg.sender_type === 'user' ? 'justify-end' : ''}`}>
                   <span className="text-xs text-gray-400">{msg.sender_name}</span>
                   <span className="text-[10px] text-gray-500">
-                    {new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}
                   </span>
                 </div>
 
@@ -1154,19 +1409,22 @@ export default function ProjectView() {
                 </div>
               </div>
 
-              {msg.sender_type === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center shrink-0 mt-1">
-                  <User className="w-4 h-4 text-gray-300" />
+              {/* 用户头像 — 显示用户名首字母 */}
+              {!isAgent && (
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 4 }}>
+                  <span style={{ color: 'white', fontSize: 13, fontWeight: 600 }}>
+                    {(msg.sender_name || currentUser?.display_name || 'U').charAt(0).toUpperCase()}
+                  </span>
                 </div>
               )}
             </div>
-          ))}
+            )})}
 
           {/* Streaming Message */}
           {streaming && (
             <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0 mt-1">
-                <Sparkles className="w-4 h-4 text-white" />
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6, #9333ea)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 4 }}>
+                <span style={{ color: 'white', fontSize: 14, fontWeight: 700 }}>H</span>
               </div>
               <div className="max-w-[75%]">
                 <span className="text-xs text-gray-400">AI 助手</span>
@@ -1327,7 +1585,7 @@ export default function ProjectView() {
           {/* Project History Skills — clickable to activate */}
           {projectHistorySkills.length > 0 && (
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-[10px] text-gray-500 shrink-0">项目技能:</span>
+              <span className="text-[10px] text-gray-500 shrink-0">工作流技能:</span>
               <div className="flex items-center gap-1.5 flex-wrap flex-1">
                 {projectHistorySkills.map((s: any) => {
                   const matched = skills.find(sk => sk.skill_name === s.skill_name)
@@ -1450,7 +1708,7 @@ export default function ProjectView() {
               placeholder={
                 lockState.locked && !lockState.is_me
                   ? `只读模式 — 正由 ${lockState.editor_display_name} 编辑`
-                  : project.status !== 'active' ? '项目已归档 (只读)' : '输入 @技能名 调用技能... (拖拽文件到此处上传)'}
+                  : project.status !== 'active' ? '工作流已归档 (只读)' : '输入 @技能名 调用技能... (拖拽文件到此处上传)'}
               projectId={projectId!}
               bottomPanelHeight={bottomHeight || 0} />
           </div>
@@ -1488,26 +1746,26 @@ export default function ProjectView() {
                     }
                     setDragOverQueueIdx(null)
                   }}
-                  className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg border transition-all group/queue ${
+                  className={`flex items-start gap-2 px-3 py-2.5 rounded-xl border transition-all group/queue ${
                     dragOverQueueIdx === idx
-                      ? 'border-blue-500/60 bg-blue-500/10'
-                      : 'border-gray-700/60 bg-gray-800/40 hover:border-gray-600'
+                      ? 'border-blue-400 bg-blue-500/15 shadow-md shadow-blue-500/10'
+                      : 'border-gray-500/40 bg-gray-700/50 hover:border-gray-400 hover:bg-gray-700/70'
                   }`}>
-                  {/* Drag handle */}
-                  <div className="shrink-0 mt-0.5 cursor-grab active:cursor-grabbing text-gray-600 hover:text-gray-400">
-                    <GripVertical className="w-3.5 h-3.5" />
+                  {/* Drag handle — 显眼 */}
+                  <div className="shrink-0 mt-0.5 cursor-grab active:cursor-grabbing text-gray-400 hover:text-amber-400 transition-colors p-0.5 rounded hover:bg-amber-500/10">
+                    <GripVertical className="w-4 h-4" />
                   </div>
                   {/* Position indicator */}
-                  <div className="shrink-0 w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-bold mt-0.5">
+                  <div className="shrink-0 w-6 h-6 rounded-lg bg-blue-500/20 text-blue-300 flex items-center justify-center text-[11px] font-bold mt-0.5 border border-blue-500/30">
                     {idx + 1}
                   </div>
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-300 whitespace-pre-wrap line-clamp-2">{task.content}</p>
+                    <p className="text-[12px] text-gray-200 whitespace-pre-wrap line-clamp-2 leading-relaxed">{task.content}</p>
                     {task.files.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
+                      <div className="flex flex-wrap gap-1 mt-1.5">
                         {task.files.map((f: any, fi: number) => (
-                          <span key={fi} className="inline-flex items-center gap-1 text-[9px] text-gray-500 bg-gray-700/50 px-1.5 py-0.5 rounded">
+                          <span key={fi} className="inline-flex items-center gap-1 text-[10px] text-amber-300/80 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded-md">
                             <Paperclip className="w-2.5 h-2.5" />
                             {f.filename}
                           </span>
@@ -1515,12 +1773,12 @@ export default function ProjectView() {
                       </div>
                     )}
                   </div>
-                  {/* Actions */}
-                  <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover/queue:opacity-100 transition-opacity">
+                  {/* Actions — 始终可见，不隐藏 */}
+                  <div className="shrink-0 flex flex-col items-center gap-1 ml-1">
                     {idx > 0 && (
                       <button
                         onClick={() => moveQueueItem(idx, idx - 1)}
-                        className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-gray-300 transition-colors"
+                        className="p-1.5 rounded-lg bg-gray-700/60 hover:bg-gray-600 text-gray-300 hover:text-white transition-colors border border-gray-600/50"
                         title="上移"
                       >
                         <ArrowUp className="w-3 h-3" />
@@ -1528,14 +1786,14 @@ export default function ProjectView() {
                     )}
                     <button
                       onClick={() => editQueuedTask(task)}
-                      className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-blue-400 transition-colors"
+                      className="p-1.5 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 hover:text-blue-200 transition-colors border border-blue-500/30"
                       title="编辑"
                     >
                       <Pencil className="w-3 h-3" />
                     </button>
                     <button
                       onClick={() => cancelQueuedTask(task.id)}
-                      className="p-1 rounded hover:bg-gray-700 text-gray-500 hover:text-red-400 transition-colors"
+                      className="p-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-red-200 transition-colors border border-red-500/30"
                       title="取消"
                     >
                       <X className="w-3 h-3" />
@@ -1561,47 +1819,137 @@ export default function ProjectView() {
         style={{ width: rightWidth }}
         onDragOver={handleGlobalDragOver}
       >
-        {/* Project File Browser — 树形结构 + 图标视图 + 文件类型颜色 */}
+        {/* File Browser — 标签页系统 */}
         <div className="p-4 border-b border-gray-800 shrink-0" style={{ height: sectionHeights.files > 0 ? sectionHeights.files : 'auto', minHeight: 60, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div className="flex items-center justify-between mb-3 shrink-0">
-            <h3 className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex items-center gap-2">
-              <FolderOpen className="w-3.5 h-3.5 text-green-400" />
-              项目文件
-            </h3>
-            <div className="flex gap-0.5">
-              <button onClick={() => setFileViewMode('list')}
-                className={`p-1 rounded ${fileViewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
-                <List className="w-3 h-3" />
+          {/* Tab bar */}
+          <div className="flex items-center gap-1 mb-2 shrink-0 overflow-x-auto">
+            {/* Project files tab (permanent) */}
+            <button
+              onClick={() => setActiveFileTab('project')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border transition-all shrink-0 ${
+                activeFileTab === 'project'
+                  ? 'bg-green-500/15 text-green-300 border-green-500/30'
+                  : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/50'
+              }`}
+            >
+              <FolderOpen className="w-3 h-3" />
+              工作流文件
+            </button>
+            {/* External folder tabs */}
+            {externalTabs.map(tab => (
+              <div key={tab.id} className="relative group/tab shrink-0">
+                <button
+                  onClick={() => setActiveFileTab(tab.id)}
+                  className={`flex items-center gap-1.5 pl-2.5 pr-5 py-1 rounded-md text-[11px] font-medium border transition-all ${
+                    activeFileTab === tab.id
+                      ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                      : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/50'
+                  }`}
+                >
+                  <FolderInput className="w-3 h-3" />
+                  <span className="truncate max-w-[80px]">{tab.name}</span>
+                </button>
+                {/* Close button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); closeExternalTab(tab.id) }}
+                  className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/tab:opacity-100 transition-opacity shadow-sm"
+                  title="关闭"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </div>
+            ))}
+            {/* Add folder button — 调起系统 Finder 选择本地文件夹 */}
+            <button
+              onClick={handleOpenFolder}
+              className="shrink-0 w-6 h-6 rounded-md border border-dashed border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-500 flex items-center justify-center transition-colors"
+              title="打开本地文件夹"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+            {/* Right side: refresh + view mode toggle */}
+            <div className="flex gap-0.5 ml-auto shrink-0">
+              <button onClick={refreshFiles}
+                className="p-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
+                title="刷新文件列表">
+                <RefreshCw className="w-3 h-3" />
               </button>
-              <button onClick={() => setFileViewMode('icon')}
-                className={`p-1 rounded ${fileViewMode === 'icon' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
-                <Grid3X3 className="w-3 h-3" />
-              </button>
+              {activeFileTab === 'project' && (
+                <>
+                  <button onClick={() => setFileViewMode('list')}
+                    className={`p-1 rounded ${fileViewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
+                    <List className="w-3 h-3" />
+                  </button>
+                  <button onClick={() => setFileViewMode('icon')}
+                    className={`p-1 rounded ${fileViewMode === 'icon' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
+                    <Grid3X3 className="w-3 h-3" />
+                  </button>
+                </>
+              )}
             </div>
           </div>
-          {fileTree.length === 0 ? (
-            <p className="text-xs text-gray-500">项目沙盒为空，上传文件后显示</p>
-          ) : (
-            <div className="flex-1 overflow-y-auto text-[11px]">
-              <FileTreeNodes
-                nodes={fileTree}
-                expanded={expandedDirs}
-                onToggle={(path) => {
-                  const next = new Set(expandedDirs)
-                  if (next.has(path)) next.delete(path)
-                  else next.add(path)
-                  setExpandedDirs(next)
-                }}
-                viewMode={fileViewMode}
-                onContextMenu={handleContextMenu}
-                onReveal={handleRevealInFinder}
-                depth={0}
-                iconViewPath={iconViewPath}
-                onIconViewNav={(p) => setIconViewPath(p ? p.split('/') : [])}
-              />
-            </div>
-          )}
-          <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-y-auto text-[11px]">
+            {activeFileTab === 'project' ? (
+              /* ── Project files ── */
+              fileTree.length === 0 ? (
+                <p className="text-xs text-gray-500">项目沙盒为空，上传文件后显示</p>
+              ) : (
+                <FileTreeNodes
+                  nodes={fileTree}
+                  expanded={expandedDirs}
+                  onToggle={(path) => {
+                    const next = new Set(expandedDirs)
+                    if (next.has(path)) next.delete(path)
+                    else next.add(path)
+                    setExpandedDirs(next)
+                  }}
+                  viewMode={fileViewMode}
+                  onContextMenu={handleContextMenu}
+                  onReveal={handleRevealInFinder}
+                  depth={0}
+                  iconViewPath={iconViewPath}
+                  onIconViewNav={(p) => setIconViewPath(p ? p.split('/') : [])}
+                />
+              )
+            ) : (
+              /* ── External folder ── */
+              (() => {
+                const tab = externalTabs.find(t => t.id === activeFileTab)
+                if (!tab) return <p className="text-xs text-gray-500">标签不存在</p>
+                if (tab.loading) return (
+                  <div className="flex items-center gap-2 py-4">
+                    <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                    <span className="text-xs text-gray-400">加载中...</span>
+                  </div>
+                )
+                if (tab.error) return <p className="text-xs text-red-400">{tab.error}</p>
+                if (tab.tree.length === 0) return (
+                  <div className="flex flex-col items-center gap-2 py-4">
+                    <p className="text-xs text-gray-500">文件夹为空或加载失败</p>
+                    <button
+                      onClick={() => openExternalFolder(tab.path)}
+                      className="text-[10px] px-3 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+                    >重新加载</button>
+                  </div>
+                )
+                return (
+                  <FileTreeNodes
+                    nodes={tab.tree}
+                    expanded={tab.expanded}
+                    onToggle={(path) => toggleExternalExpand(tab.id, path)}
+                    viewMode="list"
+                    onContextMenu={handleContextMenu}
+                    onReveal={handleRevealInFinder}
+                    depth={0}
+                    iconViewPath={[]}
+                  />
+                )
+              })()
+            )}
+          </div>
+          <p className="text-[10px] text-gray-500 mt-2 leading-relaxed shrink-0">
             拖拽文件到左侧对话框 · 右键在访达中打开
           </p>
         </div>
@@ -1736,7 +2084,7 @@ export default function ProjectView() {
           <div className="absolute inset-x-0 -top-1 -bottom-1" />
         </div>
 
-        {/* Artifacts — 项目产出物 (with file type filter) */}
+        {/* Artifacts — 工作流产出物 (with file type filter) */}
         <div className="p-4 flex-1 flex flex-col min-h-0" style={{ overflow: 'hidden' }}>
           {(() => {
             const allWithPaths = artifacts.filter((a: any) => a.artifact_path)
@@ -1774,8 +2122,13 @@ export default function ProjectView() {
               <>
                 <h3 className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-2 flex items-center gap-2">
                   <FileText className="w-3.5 h-3.5 text-amber-400" />
-                  项目产出物
-                  <span className="ml-auto text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">
+                  工作流产出物
+                  <button onClick={refreshFiles}
+                    className="ml-auto p-0.5 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
+                    title="刷新产出物">
+                    <RefreshCw className="w-3 h-3" />
+                  </button>
+                  <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">
                     {filtered.length}{artifactTypeFilter.size > 0 ? `/${allWithPaths.length}` : ''}
                   </span>
                 </h3>
@@ -1788,7 +2141,7 @@ export default function ProjectView() {
                       className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
                         artifactTypeFilter.size === 0
                           ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                          : 'bg-gray-800/40 text-gray-500 border-gray-700 hover:border-gray-600 hover:text-gray-400'
+                          : 'bg-white/10 text-gray-300 border-gray-600 hover:bg-white/20 hover:text-white'
                       }`}
                     >全部</button>
                     {availableTypes.map(t => {
@@ -1800,7 +2153,7 @@ export default function ProjectView() {
                           className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all flex items-center gap-1 ${
                             active
                               ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                              : 'bg-gray-800/40 text-gray-500 border-gray-700 hover:border-gray-600 hover:text-gray-400'
+                              : 'bg-white/10 text-gray-300 border-gray-600 hover:bg-white/20 hover:text-white'
                           }`}
                         >
                           <span className="text-[9px]">{typeIcon[t] || '📎'}</span>
@@ -1844,7 +2197,8 @@ export default function ProjectView() {
                         <File className={`w-3.5 h-3.5 ${fileIconColor('.' + (a.file_type || 'file'))} shrink-0`} />
                         <div className="flex-1 min-w-0" onClick={() => {
                           if (a.artifact_path) {
-                            window.open(`http://${window.location.hostname}:8000/api/artifacts/file/${projectId}/${encodeURIComponent(a.artifact_path)}`, '_blank')
+                            const storageRoot = '/Users/jiayiren/Desktop/Hermes_Agent/enterprise-ai-platform/backend/storage/projects'
+                            api.openFile(`${storageRoot}/project_${projectId}/${a.artifact_path}`).catch(() => {})
                           }
                         }}>
                           <p className="text-xs font-medium text-gray-300 truncate group-hover:text-amber-300 transition-colors">{a.title}</p>
@@ -1853,10 +2207,12 @@ export default function ProjectView() {
                         <button onClick={(e) => {
                           e.stopPropagation()
                           if (a.artifact_path) {
-                            window.open(`http://${window.location.hostname}:8000/api/artifacts/file/${projectId}/${encodeURIComponent(a.artifact_path)}`, '_blank')
+                            const storageRoot = '/Users/jiayiren/Desktop/Hermes_Agent/enterprise-ai-platform/backend/storage/projects'
+                            api.openFile(`${storageRoot}/project_${projectId}/${a.artifact_path}`).catch(() => {})
                           }
                         }}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-700 transition-all shrink-0">
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-700 transition-all shrink-0"
+                          title="用默认应用打开">
                           <ExternalLink className="w-3 h-3 text-gray-400" />
                         </button>
                       </div>
@@ -1874,7 +2230,6 @@ export default function ProjectView() {
           className="fixed inset-0 z-50 flex flex-col items-center justify-center"
           onDragOver={handleGlobalDragOver}
           onDragLeave={handleGlobalDragLeave}
-          onDrop={handleGlobalDrop}
         >
           <div className="absolute inset-0 bg-blue-900/15 backdrop-blur-[2px] pointer-events-none" />
           <div className="relative z-10 bg-gray-900/95 border-2 border-dashed border-blue-500 rounded-2xl px-12 py-10 shadow-2xl shadow-blue-500/20 text-center pointer-events-none">
@@ -2122,11 +2477,7 @@ export default function ProjectView() {
                 <p className="text-sm text-gray-300 leading-relaxed">{detailDeptSkill.description}</p>
               </div>
             )}
-            <div className="flex-1 overflow-y-auto px-6 py-4 prose prose-invert prose-sm max-w-none
-              prose-headings:text-gray-200 prose-p:text-gray-400 prose-strong:text-blue-300
-              prose-code:text-pink-400 prose-code:bg-gray-900/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded
-              prose-pre:bg-gray-900/50 prose-pre:border prose-pre:border-gray-700/50
-              prose-a:text-blue-400 prose-li:text-gray-400 prose-td:text-gray-400 prose-th:text-gray-300">
+            <div className="flex-1 overflow-y-auto px-6 py-4 markdown-body text-sm">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {detailDeptSkill.content_prompt || '无内容'}
               </ReactMarkdown>

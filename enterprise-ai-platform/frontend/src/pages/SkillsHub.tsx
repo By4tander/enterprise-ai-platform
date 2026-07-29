@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from '../services/api'
-import { useAppStore } from '../store'
+import { useAppStore, useAuthStore } from '../store'
+import { hasPermission } from '../utils/permissions'
 import { BookOpen, Star, Check, X, ExternalLink, AlertCircle, Upload, Info, FolderOpen, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 import ImportSkillModal from '../components/skills/ImportSkillModal'
 
@@ -138,6 +139,10 @@ export default function SkillsHub() {
     ))
   }
 
+  const user = useAuthStore((s) => s.user)
+  const canImport = hasPermission(user?.role, 'skill.import')
+  const canToggleDefault = hasPermission(user?.role, 'skill.toggle_default')
+
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-8 flex items-start justify-between">
@@ -147,13 +152,15 @@ export default function SkillsHub() {
             管理从已结案项目中提炼的公共技能、Prompt 模板和 SOP
           </p>
         </div>
-        <button
-          onClick={() => setShowImport(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shrink-0"
-        >
-          <Upload className="w-4 h-4" />
-          导入 Skill
-        </button>
+        {canImport && (
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shrink-0"
+          >
+            <Upload className="w-4 h-4" />
+            导入 Skill
+          </button>
+        )}
       </div>
 
       {/* Import Modal */}
@@ -183,7 +190,7 @@ export default function SkillsHub() {
                 <div className="flex items-center gap-2 mt-0.5">
                   {detailSkill.category && <span className="text-[10px] text-gray-500">{detailSkill.category}</span>}
                   {detailSkill.import_source && <span className="text-[10px] text-gray-500">· {detailSkill.import_source}</span>}
-                  {detailSkill.auto_inject && <span className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded-full">自动注入</span>}
+                  {detailSkill.auto_inject && <span className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded-full">默认加载</span>}
                 </div>
               </div>
               <button onClick={() => setDetailSkill(null)} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors">
@@ -195,11 +202,7 @@ export default function SkillsHub() {
                 <p className="text-sm text-gray-300 leading-relaxed">{detailSkill.description}</p>
               </div>
             )}
-            <div className="flex-1 overflow-y-auto px-6 py-4 prose prose-invert prose-sm max-w-none
-              prose-headings:text-gray-200 prose-p:text-gray-400 prose-strong:text-blue-300
-              prose-code:text-pink-400 prose-code:bg-gray-900/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded
-              prose-pre:bg-gray-900/50 prose-pre:border prose-pre:border-gray-700/50
-              prose-a:text-blue-400 prose-li:text-gray-400 prose-td:text-gray-400 prose-th:text-gray-300">
+            <div className="flex-1 overflow-y-auto px-6 py-4 markdown-body text-sm">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {detailSkill.content_prompt}
               </ReactMarkdown>
@@ -307,7 +310,7 @@ export default function SkillsHub() {
                             </span>
                           )}
                           {skill.auto_inject && (
-                            <span className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded-full">默认注入</span>
+                            <span className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded-full">默认加载</span>
                           )}
                           {group.importSource === 'import_zip' && (
                             <span className="text-[10px] px-2 py-0.5 bg-cyan-500/10 text-cyan-400 rounded-full">ZIP 导入</span>
@@ -348,14 +351,22 @@ export default function SkillsHub() {
                       >
                         {skill.is_approved ? '取消审核' : '审核通过'}
                       </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleToggleAutoInject(skill) }}
-                        className={`text-[10px] px-2 py-1 rounded-lg transition-colors ${
-                          skill.auto_inject ? 'bg-purple-500/10 text-purple-400 hover:bg-purple-500/20' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                        }`}
-                      >
-                        {skill.auto_inject ? '取消注入' : '注入新项目'}
-                      </button>
+                      {canToggleDefault ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleAutoInject(skill) }}
+                          className={`text-[10px] px-2 py-1 rounded-lg transition-colors ${
+                            skill.auto_inject ? 'bg-purple-500/10 text-purple-400 hover:bg-purple-500/20' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                          }`}
+                        >
+                          {skill.auto_inject ? '取消默认加载' : '默认加载'}
+                        </button>
+                      ) : (
+                        skill.auto_inject && (
+                          <span className="text-[10px] px-2 py-1 rounded-lg bg-purple-500/10 text-purple-400 cursor-default">
+                            默认加载
+                          </span>
+                        )
+                      )}
                     </div>
                   </div>
                 </div>

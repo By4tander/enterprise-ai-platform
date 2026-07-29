@@ -720,6 +720,8 @@ async def get_global_skills(
             "usage_count": s.usage_count,
             "rating": s.rating,
             "created_at": s.created_at.isoformat() if s.created_at else None,
+            "metadata_json": s.metadata_json,
+            "file_path": getattr(s, 'file_path', None),
         }
         for s in db_skills
     ]

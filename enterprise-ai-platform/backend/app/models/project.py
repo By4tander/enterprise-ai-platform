@@ -30,10 +30,12 @@ class Project(Base):
     owner_id: Mapped[str] = mapped_column(
         CHAR(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    folder_id: Mapped[str | None] = mapped_column(
+        CHAR(36), ForeignKey("project_folders.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[ProjectStatus] = mapped_column(
         SAEnum(ProjectStatus), default=ProjectStatus.ACTIVE, nullable=False
     )
-    # 项目专属 System Prompt（由部门管理员设定，或从技能自动拼装）
     system_prompt_override: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -49,6 +51,9 @@ class Project(Base):
     )
     owner: Mapped["User"] = relationship(
         "User", back_populates="projects", lazy="selectin"
+    )
+    folder: Mapped["ProjectFolder | None"] = relationship(
+        "ProjectFolder", back_populates="projects", lazy="selectin"
     )
     messages: Mapped[list["Message"]] = relationship(
         "Message", back_populates="project", lazy="selectin",

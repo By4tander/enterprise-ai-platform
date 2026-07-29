@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.api import auth, departments, projects, skills, messages, artifacts, chat, files, locks
+from app.api import auth, departments, projects, skills, messages, artifacts, chat, files, locks, folders
 
 # ---- 日志配置 ----
 logging.basicConfig(
@@ -32,22 +32,32 @@ async def lifespan(app: FastAPI):
 
 
 async def _migrate_db():
-    """增量迁移：为旧版数据库添加新列（不存在时才加）"""
+    """增量迁移：为旧版数据库添加新列/表（不存在时才加）"""
     from app.database import engine
     from sqlalchemy import text
 
     async with engine.begin() as conn:
-        # 检查 messages 表是否有 attachments_json 列
+        # messages.attachments_json
         try:
             result = await conn.execute(text("PRAGMA table_info(messages)"))
             columns = [row[1] for row in result.fetchall()]
             if 'attachments_json' not in columns:
                 await conn.execute(text("ALTER TABLE messages ADD COLUMN attachments_json TEXT"))
-                logger.info("✅ 数据库迁移：messages 表已添加 attachments_json 列")
-            else:
-                logger.debug("数据库已是最新版本（attachments_json 列已存在）")
+                logger.info("✅ 迁移：messages.attachments_json 已添加")
         except Exception as e:
-            logger.warning(f"数据库迁移检查失败（首次启动时正常）: {e}")
+            logger.warning(f"messages 迁移失败: {e}")
+
+        # projects.folder_id
+        try:
+            result = await conn.execute(text("PRAGMA table_info(projects)"))
+            columns = [row[1] for row in result.fetchall()]
+            if 'folder_id' not in columns:
+                await conn.execute(text("ALTER TABLE projects ADD COLUMN folder_id CHAR(36)"))
+                logger.info("✅ 迁移：projects.folder_id 已添加")
+        except Exception as e:
+            logger.warning(f"projects.folder_id 迁移失败: {e}")
+
+        logger.debug("数据库迁移检查完成")
 
 
 app = FastAPI(
@@ -88,6 +98,7 @@ app.include_router(artifacts.router)
 app.include_router(chat.router)
 app.include_router(files.router)
 app.include_router(locks.router)
+app.include_router(folders.router)
 
 
 @app.get("/")

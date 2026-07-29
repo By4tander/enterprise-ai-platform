@@ -243,6 +243,70 @@ async def list_project_files(
     return {"project_id": project_id, "sandbox_path": str(sandbox), "files": files, "tree": build_tree(tree, "")}
 
 
+# ── 外部文件夹浏览 ──
+class BrowseFolderRequest(BaseModel):
+    path: str
+
+
+@router.post("/browse")
+async def browse_external_folder(
+    body: BrowseFolderRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """浏览外部文件夹内容（返回与项目文件相同的树结构）"""
+    raw_path = body.path.strip().rstrip('/')
+    if not raw_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不能为空")
+    folder = Path(raw_path).expanduser().resolve()
+    if not folder.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"路径不存在: {folder}")
+    if not folder.is_dir():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不是文件夹")
+
+    files = []
+    dirs_set = set()
+    try:
+        for item in sorted(folder.iterdir()):
+            if item.name.startswith('.') or item.name == '.DS_Store':
+                continue
+            if item.is_dir():
+                rel = item.name
+                dirs_set.add(rel)
+            elif item.is_file():
+                try:
+                    stat = item.stat()
+                    files.append({
+                        "name": item.name,
+                        "relative_path": item.name,
+                        "stored_path": str(item),
+                        "size": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "ext": item.suffix.lower(),
+                    })
+                except OSError:
+                    continue
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限访问该文件夹")
+
+    files.sort(key=lambda f: (0, f["name"]) if False else (f["name"]))
+
+    tree: dict[str, list] = {"": []}
+    for d in sorted(dirs_set):
+        tree[""].append({
+            "name": d,
+            "relative_path": d,
+            "type": "directory",
+            "ext": "",
+            "size": 0,
+            "stored_path": str(folder / d),
+            "modified": "",
+        })
+    for f in files:
+        tree[""].append(f)
+
+    return {"path": str(folder), "name": folder.name, "files": files, "tree": build_tree(tree, "")}
+
+
 # ── 在 Finder 中打开文件位置 ──
 @router.post("/reveal")
 async def reveal_in_finder(
@@ -268,3 +332,116 @@ async def reveal_in_finder(
     except Exception as e:
         logger.error(f"[Files] reveal 失败: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ── 用默认应用打开文件 ──
+@router.post("/open")
+async def open_file_with_default_app(
+    body: RevealRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """用系统默认应用打开文件"""
+    path = Path(body.path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
+
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.Popen(["open", str(path)])
+        elif system == "Windows":
+            subprocess.Popen(["start", "", str(path)], shell=True)
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+        return {"success": True, "path": str(path)}
+    except Exception as e:
+        logger.error(f"[Files] open 失败: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ── 预热 osascript 运行时（减少首次打开延迟） ──
+@router.post("/warmup-picker")
+async def warmup_picker():
+    """预热 osascript 运行时，减少首次打开文件夹选择器的延迟"""
+    import asyncio
+    if platform.system() == "Darwin":
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "osascript", "-e", 'return ""',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+# ── 打开系统文件夹选择器 ──
+@router.post("/pick-folder")
+async def pick_folder(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """调起操作系统原生文件夹选择器，返回用户选择的文件夹路径"""
+    import asyncio
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            # macOS: 用 osascript 调起 Finder 文件夹选择器
+            script = 'tell application "Finder" to set theFolder to choose folder with prompt "选择要打开的文件夹"\nreturn POSIX path of theFolder'
+            proc = await asyncio.create_subprocess_exec(
+                "osascript", "-e", script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return {"cancelled": True, "path": None}
+            folder_path = stdout.decode("utf-8").strip().rstrip('/')
+            if not folder_path or proc.returncode != 0:
+                return {"cancelled": True, "path": None}
+            # 验证路径存在且是目录
+            if not Path(folder_path).is_dir():
+                return {"cancelled": True, "path": None}
+            return {"cancelled": False, "path": folder_path}
+
+        elif system == "Windows":
+            # Windows: 用 PowerShell 调起文件夹选择器
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$f.Description = '选择要打开的文件夹'; "
+                "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath } else { '' }"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "powershell", "-Command", script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            folder_path = stdout.decode("utf-8").strip()
+            if not folder_path:
+                return {"cancelled": True, "path": None}
+            return {"cancelled": False, "path": folder_path}
+
+        else:
+            # Linux: 用 zenity 调起文件夹选择器
+            proc = await asyncio.create_subprocess_exec(
+                "zenity", "--file-selection", "--directory", "--title=选择要打开的文件夹",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            folder_path = stdout.decode("utf-8").strip()
+            if not folder_path:
+                return {"cancelled": True, "path": None}
+            return {"cancelled": False, "path": folder_path}
+
+    except asyncio.TimeoutError:
+        return {"cancelled": True, "path": None}
+    except Exception as e:
+        logger.error(f"[Files] pick-folder 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

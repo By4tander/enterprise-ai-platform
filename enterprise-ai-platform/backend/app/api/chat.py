@@ -255,6 +255,7 @@ async def chat_stream(
                     sender_name="hermes-agent",
                     content=full_content or "(思考过程)",
                     thinking_content=full_thinking,
+                    tokens_used=done_data.get("total_tokens", done_data.get("input_tokens", 0) + done_data.get("output_tokens", 0)),
                 )
                 db.add(agent_msg)
                 await db.commit()

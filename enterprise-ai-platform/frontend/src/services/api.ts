@@ -100,11 +100,13 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  updateProject: (id: string, data: { name?: string; description?: string }) =>
+  updateProject: (id: string, data: { name?: string; description?: string; status?: string }) =>
     request(`/projects/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+  deleteProject: (id: string) =>
+    request(`/projects/${id}`, { method: 'DELETE' }),
 
   archiveProject: (id: string, generateSkills = true) =>
     request(`/projects/${id}/archive`, {
@@ -114,6 +116,8 @@ export const api = {
 
   // ── Messages ──
   getMessages: (projectId: string) => request(`/messages/${projectId}`),
+  getMessagesWithOffset: (projectId: string, offset: number, limit: number) =>
+    request(`/messages/${projectId}?offset=${offset}&limit=${limit}`),
 
   // ── Skills ──
   getSkills: (departmentId?: string) =>
@@ -144,11 +148,33 @@ export const api = {
 
   // ── Files ──
   getProjectFiles: (projectId: string) => request(`/files/project/${projectId}`),
+  browseFolder: (path: string) =>
+    request('/files/browse', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   revealInFinder: (path: string) =>
     request('/files/reveal', {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+  openFile: (path: string) =>
+    request('/files/open', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  pickFolder: async (): Promise<{ cancelled: boolean; path: string | null }> => {
+    // 特殊处理：无超时限制（用户可能需要很长时间选择文件夹）
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/files/pick-folder`, {
+      method: 'POST',
+      headers,
+    });
+    if (!res.ok) throw new Error(`请求失败 (HTTP ${res.status})`);
+    return res.json();
+  },
 
   // ── Locks (项目协作锁定) ──
   getLockStatus: (projectId: string) => request(`/locks/status/${projectId}`),
@@ -159,6 +185,23 @@ export const api = {
   getMyRequests: () => request('/locks/my-requests'),
   respondTransfer: (requestId: string, approved: boolean) => request('/locks/respond-transfer', { method: 'POST', body: JSON.stringify({ request_id: requestId, approved }) }),
   forceTakeover: (projectId: string) => request('/locks/force-takeover', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
+
+  // ── Folders (项目文件夹) ──
+  getFolders: (departmentId?: string) =>
+    request(`/folders/${departmentId ? `?department_id=${departmentId}` : ''}`),
+  createFolder: (data: { name: string; color: string; department_id: string }) =>
+    request('/folders/', { method: 'POST', body: JSON.stringify(data) }),
+  updateFolder: (folderId: string, data: { name?: string; color?: string }) =>
+    request(`/folders/${folderId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteFolder: (folderId: string) =>
+    request(`/folders/${folderId}`, { method: 'DELETE' }),
+  moveProjectToFolder: (projectId: string, folderId: string | null) =>
+    request(`/folders/${folderId || 'none'}/move-project?project_id=${projectId}`, {
+      method: 'POST',
+      body: JSON.stringify({ folder_id: folderId }),
+    }),
+  triggerClusterMemory: (folderId: string) =>
+    request(`/folders/${folderId}/cluster-memory`, { method: 'POST' }),
 };
 
 // ── SSE 流式聊天 ──
@@ -176,12 +219,51 @@ export function chatStream(
     onQueue?: (msg: string) => void;
     onDone?: (messageId: string) => void;
     onError?: (error: string) => void;
+    onHealthChange?: (status: 'connected' | 'stale' | 'timeout') => void;
   },
   filePaths?: string[],
   attachments?: Array<{ filename: string; size: number; stored_path?: string; content_type?: string }>
 ): AbortController {
   const controller = new AbortController();
   const token = localStorage.getItem('access_token');
+
+  // ── 连接健康监测 ──
+  let lastDataTime = Date.now();
+  let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  let streamStarted = false; // 收到第一个数据后才开始计时
+  const STALE_THRESHOLD = 30000  // 30秒无数据 → 疑似卡住
+  const TIMEOUT_THRESHOLD = 120000 // 120秒无数据 → 超时
+
+  const startHealthMonitor = () => {
+    healthCheckTimer = setInterval(() => {
+      // 还没收到第一个数据时不检查（等待后端响应）
+      if (!streamStarted) return
+      const elapsed = Date.now() - lastDataTime
+      if (elapsed > TIMEOUT_THRESHOLD) {
+        callbacks.onHealthChange?.('timeout')
+        callbacks.onError?.(`响应超时（${Math.round(elapsed / 1000)}秒无数据），连接可能已断开`)
+        controller.abort()
+        if (healthCheckTimer) clearInterval(healthCheckTimer)
+      } else if (elapsed > STALE_THRESHOLD) {
+        callbacks.onHealthChange?.('stale')
+      }
+    }, 5000)
+  }
+
+  const stopHealthMonitor = () => {
+    if (healthCheckTimer) {
+      clearInterval(healthCheckTimer)
+      healthCheckTimer = null
+    }
+  }
+
+  const touchData = () => {
+    lastDataTime = Date.now()
+    if (!streamStarted) streamStarted = true
+    callbacks.onHealthChange?.('connected')
+  }
+
+  startHealthMonitor()
 
   fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
@@ -198,24 +280,19 @@ export function chatStream(
     signal: controller.signal,
   })
     .then(async (response) => {
-      console.log('[SSE] 响应状态:', response.status, response.ok);
-      console.log('[SSE] Content-Type:', response.headers.get('content-type'));
-      console.log('[SSE] Access-Control-Allow-Origin:', response.headers.get('access-control-allow-origin'));
-
       if (!response.ok) {
+        stopHealthMonitor()
         const errBody = await response.text().catch(() => '');
-        console.error('[SSE] HTTP 错误:', response.status, errBody.slice(0, 200));
         callbacks.onError?.(`HTTP ${response.status}: ${errBody.slice(0, 200)}`);
         return;
       }
       const reader = response.body?.getReader();
       if (!reader) {
-        console.error('[SSE] response.body.getReader() 返回 null');
-        callbacks.onError?.('无法读取响应流 (response.body 不可用)');
+        stopHealthMonitor()
+        callbacks.onError?.('无法读取响应流');
         return;
       }
 
-      console.log('[SSE] ReadableStream reader 已获取，开始读取...');
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = '';
@@ -224,11 +301,12 @@ export function chatStream(
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          console.log(`[SSE] 流结束, 共接收 ${chunkCount} 个数据块`);
+          stopHealthMonitor()
+          callbacks.onHealthChange?.('connected')
           break;
         }
 
-        chunkCount++;
+        touchData() // 有数据到达，刷新健康计时器
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -298,7 +376,7 @@ export function chatStream(
       }
     })
     .catch((err) => {
-      console.error('[SSE] fetch 异常:', err.name, err.message);
+      stopHealthMonitor()
       if (err.name !== 'AbortError') {
         const msg = err.name === 'TypeError' && err.message.includes('fetch')
           ? '网络连接失败，请确认后端服务已启动'

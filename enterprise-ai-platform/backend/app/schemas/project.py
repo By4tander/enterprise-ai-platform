@@ -18,6 +18,7 @@ class ProjectOut(BaseModel):
     department_name: str = ""
     owner_id: str
     owner_name: str = ""
+    folder_id: str | None = None
     status: str
     created_at: datetime
     archived_at: datetime | None = None
@@ -32,6 +33,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     system_prompt_override: str | None = None
+    status: str | None = None  # 用于恢复归档项目为 active
 
 
 class ProjectArchiveRequest(BaseModel):

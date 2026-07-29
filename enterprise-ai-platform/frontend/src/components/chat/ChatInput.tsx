@@ -47,7 +47,7 @@ export default function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // ── 监听全局拖放事件（从 ProjectView 发出） ──
+  // ── 监听全局拖放事件（从 ProjectView 发出，外部文件拖入） ──
   useEffect(() => {
     const handler = (e: Event) => {
       const files = (e as CustomEvent).detail as File[]
@@ -58,12 +58,8 @@ export default function ChatInput({
     window.addEventListener('global-drop', handler)
     return () => window.removeEventListener('global-drop', handler)
   }, [projectId])
-  useEffect(() => {
-    const lineCount = (value.match(/\n/g) || []).length + 1
-    setRows(Math.min(Math.max(lineCount, MIN_ROWS), MAX_ROWS))
-  }, [value])
 
-  // ── 监听侧边栏拖放（沙盒内文件直接引用） ──
+  // ── 监听侧边栏拖放（沙盒内文件/外部文件夹文件直接引用） ──
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as any
@@ -79,6 +75,11 @@ export default function ChatInput({
     window.addEventListener('sidebar-drop', handler)
     return () => window.removeEventListener('sidebar-drop', handler)
   }, [])
+
+  useEffect(() => {
+    const lineCount = (value.match(/\n/g) || []).length + 1
+    setRows(Math.min(Math.max(lineCount, MIN_ROWS), MAX_ROWS))
+  }, [value])
 
   const uploadFile = async (file: File) => {
     setUploading(true)
@@ -115,18 +116,6 @@ export default function ChatInput({
     }
     e.target.value = ''
   }
-
-  // ── 监听全局拖放事件（从页面级 handler 发出） ──
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const files = (e as CustomEvent).detail as File[]
-      if (files) {
-        for (const file of files) uploadFile(file)
-      }
-    }
-    window.addEventListener('global-drop', handler)
-    return () => window.removeEventListener('global-drop', handler)
-  }, [projectId])
 
   const removeFile = (id: string) => {
     setFiles((prev) => prev.filter((f) => f.file_id !== id))

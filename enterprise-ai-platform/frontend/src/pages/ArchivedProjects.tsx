@@ -23,8 +23,8 @@ export default function ArchivedProjects() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">项目归档区</h1>
-        <p className="text-sm text-gray-500 mt-1">查阅已结案项目的历史产出与提炼报告</p>
+        <h1 className="text-2xl font-bold text-white">工作流归档区</h1>
+        <p className="text-sm text-gray-500 mt-1">查阅已结案工作流的历史产出与提炼报告</p>
       </div>
 
       {loading ? (
@@ -32,8 +32,8 @@ export default function ArchivedProjects() {
       ) : projects.length === 0 ? (
         <div className="text-center py-12 bg-gray-900 border border-gray-800 rounded-xl">
           <Archive className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-          <p className="text-gray-500">暂无已归档项目</p>
-          <p className="text-xs text-gray-600 mt-1">进行中的项目可以在此归档，系统会自动提炼技能</p>
+          <p className="text-gray-500">暂无已归档工作流</p>
+          <p className="text-xs text-gray-600 mt-1">进行中的工作流可以在此归档，系统会自动提炼技能</p>
         </div>
       ) : (
         <div className="space-y-3">

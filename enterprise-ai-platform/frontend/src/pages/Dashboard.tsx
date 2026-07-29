@@ -29,15 +29,15 @@ export default function Dashboard() {
       {/* Welcome */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-white">工作台</h1>
-        <p className="text-sm text-gray-500 mt-1">管理您的项目与 AI 协作工作流</p>
+        <p className="text-sm text-gray-500 mt-1">管理您的工作流与 AI 协作</p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         {[
-          { icon: FolderOpen, label: '活跃项目', value: stats.active, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+          { icon: FolderOpen, label: '活跃工作流', value: stats.active, color: 'text-blue-400', bg: 'bg-blue-500/10' },
           { icon: Archive, label: '已归档', value: stats.archived, color: 'text-purple-400', bg: 'bg-purple-500/10' },
-          { icon: Clock, label: '项目总数', value: stats.total, color: 'text-green-400', bg: 'bg-green-500/10' },
+          { icon: Clock, label: '工作流总数', value: stats.total, color: 'text-green-400', bg: 'bg-green-500/10' },
         ].map((stat) => (
           <div key={stat.label} className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center gap-4">
             <div className={`w-10 h-10 rounded-lg ${stat.bg} flex items-center justify-center`}>
@@ -53,14 +53,14 @@ export default function Dashboard() {
 
       {/* Project List */}
       <div>
-        <h2 className="text-lg font-semibold text-white mb-4">全部项目</h2>
+        <h2 className="text-lg font-semibold text-white mb-4">全部工作流</h2>
         {loading ? (
           <div className="text-center py-12 text-gray-500">加载中...</div>
         ) : projects.length === 0 ? (
           <div className="text-center py-12 bg-gray-900 border border-gray-800 rounded-xl">
             <FolderOpen className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-            <p className="text-gray-500">暂无项目</p>
-            <p className="text-xs text-gray-600 mt-1">点击左侧「新建项目」开始</p>
+            <p className="text-gray-500">暂无工作流</p>
+            <p className="text-xs text-gray-600 mt-1">点击左侧「新建工作流」开始</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

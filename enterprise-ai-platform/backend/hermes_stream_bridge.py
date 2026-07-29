@@ -73,6 +73,12 @@ def main():
         write_json({"type": "error", "content": f"Hermes import failed: {e}"})
         sys.exit(1)
 
+    # ── 读取系统提示词（含附件内容） ──
+    system_prompt = os.environ.get("HERMES_SYSTEM_PROMPT", "")
+    # 将系统提示词拼接到用户 prompt 前面
+    if system_prompt:
+        prompt = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{prompt}"
+
     try:
         # ── 配置加载 ──
         cfg = load_config()

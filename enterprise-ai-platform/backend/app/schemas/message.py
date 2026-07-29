@@ -1,6 +1,6 @@
 """消息 Schema"""
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -12,6 +12,7 @@ class MessageOut(BaseModel):
     content: str
     thinking_content: str | None = None
     attachments: list[dict[str, Any]] | None = None
+    tokens_used: int = 0
     timestamp: datetime
 
     class Config:
@@ -27,6 +28,11 @@ class MessageOut(BaseModel):
                 attachments = json.loads(msg.attachments_json)
             except (json.JSONDecodeError, TypeError):
                 attachments = None
+        # 确保 timestamp 包含 UTC 时区信息
+        ts = msg.timestamp
+        if ts and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
         return cls(
             id=msg.id,
             project_id=msg.project_id,
@@ -35,7 +41,8 @@ class MessageOut(BaseModel):
             content=msg.content,
             thinking_content=msg.thinking_content,
             attachments=attachments,
-            timestamp=msg.timestamp,
+            tokens_used=getattr(msg, 'tokens_used', 0) or 0,
+            timestamp=ts,
         )
 
 

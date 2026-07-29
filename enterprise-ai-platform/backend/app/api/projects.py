@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.department import Department
 from app.models.project import Project, ProjectStatus
+from app.models.project_folder import ProjectFolder
 from app.models.message import Message
 from app.models.artifact import Artifact
 from app.middleware.auth import get_current_user
@@ -73,6 +74,7 @@ async def list_projects(
             department_name=proj.department.name if proj.department else "",
             owner_id=proj.owner_id,
             owner_name=proj.owner.display_name if proj.owner else "",
+            folder_id=proj.folder_id,
             status=proj.status.value,
             created_at=proj.created_at,
             archived_at=proj.archived_at,
@@ -124,6 +126,7 @@ async def create_project(
         department_name=project.department.name,
         owner_id=project.owner_id,
         owner_name=project.owner.display_name,
+        folder_id=project.folder_id,
         status=project.status.value,
         created_at=project.created_at,
         archived_at=project.archived_at,
@@ -192,6 +195,15 @@ async def update_project(
         project.description = req.description
     if req.system_prompt_override is not None:
         project.system_prompt_override = req.system_prompt_override
+    # 恢复归档项目为活跃状态
+    if req.status == 'active' and project.status.value == 'archived':
+        # 验证原文件夹是否仍然存在
+        if project.folder_id:
+            folder = await db.get(ProjectFolder, project.folder_id)
+            if folder is None:
+                project.folder_id = None  # 文件夹已删除，归入未分类
+        project.status = ProjectStatus.ACTIVE
+        project.archived_at = None
 
     await db.commit()
     await db.refresh(project)
@@ -211,10 +223,39 @@ async def update_project(
         department_name=project.department.name,
         owner_id=project.owner_id,
         owner_name=project.owner.display_name,
+        folder_id=project.folder_id,
         status=project.status.value,
         created_at=project.created_at,
         archived_at=project.archived_at,
     )
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """删除工作流（仅管理员）"""
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+
+    # 权限检查：仅管理员可删除
+    if current_user.role == UserRole.MEMBER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="成员无权删除工作流")
+
+    await db.delete(project)
+    await db.commit()
+
+    # 清理沙盒文件
+    try:
+        from app.services.session_isolation import SessionIsolationEngine
+        SessionIsolationEngine().cleanup_sandbox(project_id)
+    except Exception:
+        pass
+
+    return {"success": True, "message": "工作流已删除"}
 
 
 @router.post("/{project_id}/archive", response_model=ProjectOut)
@@ -236,17 +277,20 @@ async def archive_project(
     await db.commit()
     await db.refresh(project)
 
-    # Phase 4: 触发技能提炼流水线
+    # 技能提炼放在后台执行，不阻塞归档响应
     skills_generated: list = []
     if req.generate_skills:
-        try:
-            from app.services.distillation import DistillationService
-            distiller = DistillationService()
-            result = await distiller.distill_project(project_id, db)
-            skills_generated = [s.skill_name for s in result.skills_generated]
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"技能提炼失败（不影响归档）: {e}")
+        import asyncio
+        async def _run_distillation():
+            try:
+                from app.services.distillation import DistillationService
+                distiller = DistillationService()
+                result = await distiller.distill_project(project_id, db)
+                skills_generated.extend([s.skill_name for s in result.skills_generated])
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"技能提炼失败（不影响归档）: {e}")
+        asyncio.create_task(_run_distillation())
 
     # 重新加载关联
     result = await db.execute(

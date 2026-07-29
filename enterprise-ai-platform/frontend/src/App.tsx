@@ -5,10 +5,8 @@ import MainLayout from './components/layout/MainLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import ProjectView from './pages/ProjectView'
-import SkillsHub from './pages/SkillsHub'
+import AgentResourceHub from './pages/AgentResourceHub'
 import HermesGlobalSkills from './pages/HermesGlobalSkills'
-import ArchivedProjects from './pages/ArchivedProjects'
-
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuth = useAuthStore((s) => s.isAuthenticated())
   if (!isAuth) return <Navigate to="/login" replace />
@@ -33,9 +31,8 @@ function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="project/:projectId" element={<ProjectView />} />
-          <Route path="skills" element={<SkillsHub />} />
+          <Route path="skills" element={<AgentResourceHub />} />
           <Route path="global-skills" element={<HermesGlobalSkills />} />
-          <Route path="archived" element={<ArchivedProjects />} />
         </Route>
       </Routes>
     </BrowserRouter>

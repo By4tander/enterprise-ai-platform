@@ -7,6 +7,8 @@ import {
   Cpu, Globe, Home, Film, BarChart3, Terminal, FileText, FolderOpen
 } from 'lucide-react'
 import { api } from '../services/api'
+import { useAuthStore } from '../store'
+import { hasPermission } from '../utils/permissions'
 
 interface GlobalSkill {
   id: string
@@ -20,6 +22,7 @@ interface GlobalSkill {
   auto_inject: boolean
   is_approved: boolean
   file_path?: string
+  metadata_json?: string | null
 }
 
 const CATEGORY_META: Record<string, { icon: typeof Zap; color: string; label: string }> = {
@@ -101,6 +104,46 @@ export default function HermesGlobalSkills() {
     }
   }
 
+  // ── 自定义技能分组（同一上传包的技能合并显示） ──
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+
+  function groupCustomSkills(skills: GlobalSkill[]) {
+    const groups = new Map<string, GlobalSkill[]>()
+    for (const skill of skills) {
+      // 优先用 metadata_json.original_filename 分组（ZIP 上传的技能）
+      let groupKey = skill.id
+      if (skill.metadata_json) {
+        try {
+          const meta = JSON.parse(skill.metadata_json)
+          if (meta.original_filename) {
+            groupKey = meta.original_filename.replace('.zip', '')
+          }
+        } catch {}
+      }
+      if (!groups.has(groupKey)) groups.set(groupKey, [])
+      groups.get(groupKey)!.push(skill)
+    }
+    const result: { key: string; name: string; mainSkill: GlobalSkill; subSkills: GlobalSkill[] }[] = []
+    for (const [key, gs] of groups) {
+      if (gs.length === 1) {
+        result.push({ key, name: gs[0].skill_name, mainSkill: gs[0], subSkills: [] })
+      } else {
+        // 找主技能：优先 yaml_frontmatter 格式（SKILL.md 入口文件）
+        let mainSkill = gs.find(s => {
+          try { return JSON.parse(s.metadata_json || '{}').skill_format === 'yaml_frontmatter' } catch { return false }
+        })
+        if (!mainSkill) mainSkill = gs.find(s => s.file_path?.endsWith('/SKILL.md')) || gs[0]
+        result.push({
+          key,
+          name: mainSkill.skill_name, // 用主技能名作为组名
+          mainSkill,
+          subSkills: gs.filter(s => s.id !== mainSkill!.id)
+        })
+      }
+    }
+    return result
+  }
+
   // Search filter (applied to all)
   const searchFiltered = skills.filter(s => {
     if (!searchQuery) return true
@@ -127,6 +170,7 @@ export default function HermesGlobalSkills() {
 
   const nativeFiltered = filtered.filter(s => s.import_source === 'hermes_native')
   const customFiltered = filtered.filter(s => s.import_source !== 'hermes_native')
+  const customGroups = groupCustomSkills(customFiltered)
 
   const nativeGrouped = nativeFiltered.reduce((acc, skill) => {
     const cat = skill.category || '其他'
@@ -160,13 +204,15 @@ export default function HermesGlobalSkills() {
                 className="pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 placeholder-gray-500 w-56"
               />
             </div>
-            <button
-              onClick={() => setShowUpload(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              <Upload className="w-4 h-4" />
-              上传技能
-            </button>
+            {hasPermission(useAuthStore.getState()?.user?.role, 'skill.global_manage') && (
+              <button
+                onClick={() => setShowUpload(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+                上传技能
+              </button>
+            )}
           </div>
         </div>
         <p className="text-xs text-gray-500 mt-3 max-w-3xl leading-relaxed">
@@ -183,7 +229,7 @@ export default function HermesGlobalSkills() {
           {[
             { key: 'all' as const, label: '全部', count: skills.length },
             { key: 'native' as const, label: '系统内置', count: allNative.length },
-            { key: 'custom' as const, label: '自定义', count: allCustom.length },
+            { key: 'custom' as const, label: '自定义', count: groupCustomSkills(allCustom).length },
           ].map(tab => (
             <button
               key={tab.key}
@@ -256,15 +302,38 @@ export default function HermesGlobalSkills() {
                     <Upload className="w-3.5 h-3.5" />
                   </div>
                   <h2 className="text-sm font-semibold text-gray-300">自定义技能</h2>
-                  <span className="text-[10px] text-gray-600">{customFiltered.length} 个技能</span>
+                  <span className="text-[10px] text-gray-600">{customGroups.length} 个技能包</span>
                   <span className="text-[9px] px-1.5 py-0.5 bg-green-500/10 text-green-400 rounded-full border border-green-500/20">
                     用户上传
                   </span>
                 </div>
                 <div className="grid gap-3">
-                  {customFiltered.map(skill => (
-                    <SkillCard key={skill.id} skill={skill} onDetail={setDetailSkill} onContextMenu={(s, x, y) => setContextMenu({ x, y, skill: s })} />
-                  ))}
+                  {customGroups.map(group => {
+                    const skill = group.mainSkill
+                    return (
+                      <div
+                        key={group.key}
+                        className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-all cursor-pointer"
+                        onClick={() => setDetailSkill(skill)}
+                        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, skill }) }}
+                      >
+                        <div className="px-5 py-4 flex items-center gap-4">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-green-500/10 border border-green-500/20">
+                            <Upload className="w-4 h-4 text-green-400" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-200">{group.name}</span>
+                              {group.subSkills.length > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded-full">{group.subSkills.length + 1} 个文件</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-0.5 truncate">{skill.description || '暂无描述'}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -402,6 +471,11 @@ function getSkillPath(skill: GlobalSkill): string {
     const parts = skill.id.replace('native:', '').split('/')
     return `/Users/jiayiren/.hermes/skills/${parts[0]}/${parts[1]}`
   }
+  // 自定义技能：从 skill_name 构建路径
+  if (skill.import_source && skill.import_source !== 'hermes_native') {
+    const safeName = skill.skill_name.replace(/[^\w\-]/g, '_')
+    return `/Users/jiayiren/.hermes/skills/global/${safeName}`
+  }
   return ''
 }
 
@@ -465,7 +539,7 @@ function SkillDetailModal({ skill, onClose }: { skill: GlobalSkill; onClose: () 
               {isNative && <span className="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-400 rounded-full">Hermes 原生</span>}
               {!isNative && <span className="text-[10px] px-2 py-0.5 bg-green-500/10 text-green-400 rounded-full">自定义</span>}
               {skill.category && <span className="text-[10px] text-gray-500">{skill.category}</span>}
-              {skill.auto_inject && <span className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded-full">自动注入</span>}
+              {skill.auto_inject && <span className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded-full">默认加载</span>}
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors">
@@ -479,11 +553,7 @@ function SkillDetailModal({ skill, onClose }: { skill: GlobalSkill; onClose: () 
           </div>
         )}
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 prose prose-invert prose-sm max-w-none
-          prose-headings:text-gray-200 prose-p:text-gray-400 prose-strong:text-amber-300
-          prose-code:text-pink-400 prose-code:bg-gray-900/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded
-          prose-pre:bg-gray-900/50 prose-pre:border prose-pre:border-gray-700/50
-          prose-a:text-blue-400 prose-li:text-gray-400 prose-td:text-gray-400 prose-th:text-gray-300">
+        <div className="flex-1 overflow-y-auto px-6 py-4 markdown-body text-sm">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {skill.content_prompt}
           </ReactMarkdown>
