@@ -105,20 +105,22 @@ export default function VideoPlayer({ src, filename, onPopOut, onClose, compact 
 
   return (
     <div className="flex flex-col h-full bg-black/90 rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900/80 border-b border-gray-800 shrink-0">
-        <span className="text-[11px] text-gray-400 truncate flex-1">{filename}</span>
-        {onPopOut && (
-          <button onClick={onPopOut} className="p-1 rounded text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="独立窗口">
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-        )}
-        {onClose && (
-          <button onClick={onClose} className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="关闭">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
+      {/* Header — hidden in compact mode (FloatingWindow provides its own) */}
+      {!compact && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900/80 border-b border-gray-800 shrink-0">
+          <span className="text-[11px] text-gray-400 truncate flex-1">{filename}</span>
+          {onPopOut && (
+            <button onClick={onPopOut} className="p-1 rounded text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="独立窗口">
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onClose && (
+            <button onClick={onClose} className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="关闭">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Video */}
       <div className="flex-1 flex items-center justify-center min-h-0 relative cursor-pointer" onClick={togglePlay}>

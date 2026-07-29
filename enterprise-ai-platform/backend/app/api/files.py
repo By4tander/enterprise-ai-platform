@@ -456,9 +456,31 @@ async def pick_folder(
 @router.get("/content")
 async def get_file_content(
     path: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    token: str | None = None,
 ):
-    """提供文件内容（图片/视频预览用）"""
+    """
+    提供文件内容（图片/视频预览用）。
+    支持 token query param 认证（因为 <img>/<video> 标签无法发送 Authorization header）。
+    """
+    from app.database import async_session_factory
+    from app.models.user import User
+    from jose import jwt, JWTError
+    from app.config import settings
+
+    user = None
+    if token:
+        try:
+            payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                async with async_session_factory() as db:
+                    user = await db.get(User, user_id)
+        except (JWTError, Exception):
+            pass
+
+    if not user:
+        raise HTTPException(status_code=401, detail="未授权")
+
     file_path = Path(path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")

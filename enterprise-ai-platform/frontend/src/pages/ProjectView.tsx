@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, chatStream } from '../services/api'
-import { useAuthStore } from '../store'
+import { useAuthStore, useVideoStore } from '../store'
 import ImageViewer from '../components/media/ImageViewer'
 import VideoPlayer from '../components/media/VideoPlayer'
 import FloatingWindow from '../components/media/FloatingWindow'
@@ -963,19 +963,20 @@ export default function ProjectView() {
   }
   // ── 媒体预览 ──
   const [previewImage, setPreviewImage] = useState<{ src: string; name: string } | null>(null)
-  const [videoSrc, setVideoSrc] = useState<{ src: string; name: string } | null>(null)
-  const [videoPopped, setVideoPopped] = useState(false)
+  const videoSrc = useVideoStore(s => s.videoSrc)
+  const setVideoSrc = useVideoStore(s => s.setVideoSrc)
 
   const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.tiff', '.avif'])
   const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'])
 
   const handleFileClick = (path: string) => {
     const ext = path.includes('.') ? '.' + path.split('.').pop()!.toLowerCase() : ''
+    const token = useAuthStore.getState().token
+    const authUrl = `/api/files/content?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token || '')}`
     if (IMAGE_EXTS.has(ext)) {
-      setPreviewImage({ src: `/api/files/content?path=${encodeURIComponent(path)}`, name: path.split('/').pop() || '' })
+      setPreviewImage({ src: authUrl, name: path.split('/').pop() || '' })
     } else if (VIDEO_EXTS.has(ext)) {
-      setVideoSrc({ src: `/api/files/content?path=${encodeURIComponent(path)}`, name: path.split('/').pop() || '' })
-      setVideoPopped(false)
+      setVideoSrc({ src: authUrl, name: path.split('/').pop() || '' })
     } else {
       handleRevealInFinder(path)
     }
@@ -2643,38 +2644,7 @@ export default function ProjectView() {
         />
       )}
 
-      {/* ── 视频播放（全屏遮罩 + 居中播放器） ── */}
-      {videoSrc && !videoPopped && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setVideoSrc(null) }}
-        >
-          <div className="relative" style={{ width: '60vw', height: '70vh', maxWidth: 960, maxHeight: 640 }}>
-            <VideoPlayer
-              src={videoSrc.src}
-              filename={videoSrc.name}
-              onPopOut={() => setVideoPopped(true)}
-              onClose={() => setVideoSrc(null)}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── 视频画中画浮动窗口 ── */}
-      {videoSrc && videoPopped && (
-        <FloatingWindow
-          title={videoSrc.name}
-          onClose={() => setVideoPopped(false)}
-          initialWidth={520}
-          initialHeight={380}
-        >
-          <VideoPlayer
-            src={videoSrc.src}
-            filename={videoSrc.name}
-            onClose={() => { setVideoPopped(false); setVideoSrc(null) }}
-            compact
-          />
-        </FloatingWindow>
-      )}
+      {/* Video floating window is now in App.tsx for cross-page persistence */}
     </div>
   )
 }

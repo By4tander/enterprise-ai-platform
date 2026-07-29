@@ -55,3 +55,13 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentDepartment: (id) => set({ currentDepartmentId: id }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 }));
+
+// ── 全局视频播放状态（跨页面持久） ──
+interface VideoState {
+  videoSrc: { src: string; name: string } | null;
+  setVideoSrc: (src: { src: string; name: string } | null) => void;
+}
+export const useVideoStore = create<VideoState>((set) => ({
+  videoSrc: null,
+  setVideoSrc: (src) => set({ videoSrc: src }),
+}));
