@@ -92,6 +92,8 @@ export const api = {
   getProjects: (params?: string) =>
     request(`/projects/${params ? '?' + params : ''}`),
 
+  getTokenStats: () => request('/projects/token-stats'),
+
   getProject: (id: string) => request(`/projects/${id}`),
 
   createProject: (data: any) =>

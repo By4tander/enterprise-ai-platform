@@ -125,12 +125,68 @@ function SkillsTab() {
   const [detailSkill, setDetailSkill] = useState<Skill | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; skill: Skill } | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  const [showNewCategory, setShowNewCategory] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [dragOverCategory, setDragOverCategory] = useState<string | null>(null)
+  const [draggingSkill, setDraggingSkill] = useState<string | null>(null)
+  const [editingCategory, setEditingCategory] = useState<string | null>(null)
+  const [editCategoryName, setEditCategoryName] = useState('')
+  const [catContextMenu, setCatContextMenu] = useState<{ x: number; y: number; cat: string } | null>(null)
+  const [categories, setCategories] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(`skill_categories_${currentDepartmentId}`) || '[]') } catch { return [] }
+  })
 
   const loadSkills = async () => { setLoading(true); try { setSkills(await api.getSkills(currentDepartmentId || undefined)) } catch {} finally { setLoading(false) } }
   useEffect(() => { loadSkills() }, [currentDepartmentId])
 
+  // Persist categories
+  useEffect(() => { localStorage.setItem(`skill_categories_${currentDepartmentId}`, JSON.stringify(categories)) }, [categories, currentDepartmentId])
+
+  // Extract unique categories from skills + custom categories
+  const allCategories = useMemo(() => {
+    const skillCats = new Set(skills.map(s => s.category).filter(Boolean) as string[])
+    categories.forEach(c => skillCats.add(c))
+    return [...skillCats].sort()
+  }, [skills, categories])
+
+  // Filter skills
+  const filteredGroups = useMemo(() => {
+    let groups = groupSkills(skills)
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      groups = groups.filter(g => g.name.toLowerCase().includes(q) || g.mainSkill.description?.toLowerCase().includes(q))
+    }
+    if (selectedCategory) {
+      groups = groups.filter(g => g.mainSkill.category === selectedCategory)
+    }
+    return groups
+  }, [skills, searchQuery, selectedCategory, categories])
+
   const handleToggleApprove = async (skill: Skill) => { try { await api.updateSkill(skill.id, { is_approved: !skill.is_approved }); loadSkills() } catch (e: any) { alert(e.message) } }
   const handleToggleAutoInject = async (skill: Skill) => { try { await api.updateSkill(skill.id, { auto_inject: !skill.auto_inject }); loadSkills() } catch (e: any) { alert(e.message) } }
+  const handleAssignCategory = async (skillId: string, category: string) => {
+    try { await api.updateSkill(skillId, { category }); loadSkills() } catch (e: any) { alert(e.message) }
+  }
+  const handleDeleteCategory = (cat: string) => {
+    // Remove from custom categories and clear all skills with this category
+    setCategories(prev => prev.filter(c => c !== cat))
+    skills.filter(s => s.category === cat).forEach(s => api.updateSkill(s.id, { category: '' }).catch(() => {}))
+    if (selectedCategory === cat) setSelectedCategory(null)
+    loadSkills()
+    setCatContextMenu(null)
+  }
+  const handleRenameCategory = (oldName: string, newName: string) => {
+    if (!newName.trim() || oldName === newName.trim()) { setEditingCategory(null); return }
+    // Update custom categories list
+    setCategories(prev => prev.map(c => c === oldName ? newName.trim() : c))
+    // Update all skills with old category
+    skills.filter(s => s.category === oldName).forEach(s => api.updateSkill(s.id, { category: newName.trim() }).catch(() => {}))
+    if (selectedCategory === oldName) setSelectedCategory(newName.trim())
+    setEditingCategory(null)
+    loadSkills()
+  }
   const getSkillPath = (skill: Skill) => `/Users/jiayiren/.hermes/skills/${skill.department_id || 'default'}/${skill.skill_name.replace(/[^\w\-]/g, '_')}`
   const handleReveal = (skill: Skill) => { api.revealInFinder(getSkillPath(skill)).catch((e: any) => alert(e.message)); setContextMenu(null) }
   const renderStars = (r: number) => Array.from({ length: 5 }, (_, i) => <Star key={i} className={`w-3 h-3 ${i < Math.round(r) ? 'text-yellow-500 fill-yellow-500' : 'text-gray-600'}`} />)
@@ -177,12 +233,75 @@ function SkillsTab() {
       )}
 
       {/* Actions */}
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-sm text-gray-400">从已结案工作流中提炼的公共技能、Prompt 模板和 SOP</p>
-        {canImport && (
-          <button onClick={() => setShowImport(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shrink-0"><Upload className="w-4 h-4" />导入 Skill</button>
+      <div className="flex flex-col gap-3 mb-5">
+        {/* Row 1: Description + Stats + Search + Import */}
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-400">从已结案工作流中提炼的公共技能、Prompt 模板和 SOP</p>
+          {!loading && skills.length > 0 && (
+            <span className="text-[11px] font-semibold text-gray-400 px-3 py-0.5 rounded-full border border-gray-700 bg-gray-800/50">共 {groupSkills(skills).length} 个技能</span>
+          )}
+          <div className="flex-1" />
+          <div className="relative w-48">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            <input
+              value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+              placeholder="搜索技能..."
+              className="w-full pl-8 pr-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          {canImport && (
+            <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors shrink-0"><Upload className="w-3.5 h-3.5" />导入 Skill</button>
+          )}
+        </div>
+        {/* Row 2: Category tags */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+            <button onClick={() => setSelectedCategory(null)}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-all ${!selectedCategory ? 'bg-blue-500/15 text-blue-300 border-blue-500/30' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800'}`}>
+              全部
+            </button>
+            {allCategories.map(cat => (
+              editingCategory === cat ? (
+                <input key={cat} value={editCategoryName} onChange={e => setEditCategoryName(e.target.value)} autoFocus
+                  onBlur={() => handleRenameCategory(cat, editCategoryName)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleRenameCategory(cat, editCategoryName); if (e.key === 'Escape') setEditingCategory(null) }}
+                  className="px-2 py-0.5 rounded-md text-[11px] bg-gray-800 border border-blue-500 text-gray-300 focus:outline-none w-20"
+                />
+              ) : (
+                <button key={cat}
+                  onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                  onContextMenu={(e) => { e.preventDefault(); setCatContextMenu({ x: e.clientX, y: e.clientY, cat }) }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverCategory(cat) }}
+                  onDragLeave={() => setDragOverCategory(null)}
+                  onDrop={(e) => { e.preventDefault(); const sid = e.dataTransfer.getData('text/plain'); if (sid) handleAssignCategory(sid, cat); setDragOverCategory(null) }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-all ${
+                    dragOverCategory === cat ? 'bg-green-500/20 text-green-300 border-green-500/40 scale-105' :
+                    selectedCategory === cat ? 'bg-purple-500/15 text-purple-300 border-purple-500/30' :
+                    'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800'
+                  }`}>
+                  {cat}
+                </button>
+              )
+            ))}
+            <button onClick={() => setShowNewCategory(true)}
+              className="px-2 py-1 rounded-md text-[11px] text-gray-600 hover:text-gray-400 hover:bg-gray-800 border border-dashed border-gray-700 transition-all"
+              title="新建分类标签">
+              +
+            </button>
+        </div>
+        {/* New category input */}
+        {showNewCategory && (
+          <div className="flex items-center gap-2">
+            <input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} placeholder="分类名称" autoFocus
+              className="px-3 py-1 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-300 focus:outline-none focus:border-blue-500"
+              onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { setCategories(prev => [...prev, newCategoryName.trim()]); setNewCategoryName(''); setShowNewCategory(false) } }}
+            />
+            <button onClick={() => { if (newCategoryName.trim()) { setCategories(prev => [...prev, newCategoryName.trim()]); setNewCategoryName(''); setShowNewCategory(false) } }}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg">添加</button>
+            <button onClick={() => setShowNewCategory(false)} className="px-3 py-1 text-xs text-gray-500 hover:text-gray-400">取消</button>
+          </div>
         )}
       </div>
+      
 
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-gray-500 animate-spin" /></div>
@@ -193,12 +312,16 @@ function SkillsTab() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {groupSkills(skills).map((group) => {
+          {filteredGroups.map((group) => {
             const isExpanded = expandedGroups.has(group.key)
             const hasSubSkills = group.subSkills.length > 0
             const skill = group.mainSkill
             return (
-              <div key={group.key} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors">
+              <div key={group.key}
+                draggable
+                onDragStart={(e) => { e.dataTransfer.setData('text/plain', skill.id); setDraggingSkill(skill.id) }}
+                onDragEnd={() => setDraggingSkill(null)}
+                className={`bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors cursor-grab active:cursor-grabbing ${draggingSkill === skill.id ? 'opacity-50' : ''}`}>
                 <div className="cursor-pointer" onClick={() => setDetailSkill(skill)} onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, skill }) }}>
                   <div className="p-4 border-b border-gray-800">
                     <div className="flex items-start justify-between">
@@ -250,6 +373,50 @@ function SkillsTab() {
           })}
         </div>
       )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setContextMenu(null)} />
+          <div className="fixed z-[61] bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[160px]"
+            style={{ left: Math.min(contextMenu.x, window.innerWidth - 180), top: Math.min(contextMenu.y, window.innerHeight - 100) }}>
+            <button onClick={() => { setDetailSkill(contextMenu.skill); setContextMenu(null) }}
+              className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2 transition-colors">
+              <BookOpen className="w-3.5 h-3.5 text-blue-400" />查看详情
+            </button>
+            {contextMenu.skill.category && (
+              <button onClick={() => { handleAssignCategory(contextMenu.skill.id, ''); setContextMenu(null) }}
+                className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2 transition-colors">
+                <X className="w-3.5 h-3.5 text-amber-400" />取消分组
+              </button>
+            )}
+            <button onClick={() => { handleReveal(contextMenu.skill); setContextMenu(null) }}
+              className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2 transition-colors">
+              <FolderOpen className="w-3.5 h-3.5 text-gray-400" />打开文件夹
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Category Context Menu */}
+      {catContextMenu && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setCatContextMenu(null)} />
+          <div className="fixed z-[61] bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[140px]"
+            style={{ left: Math.min(catContextMenu.x, window.innerWidth - 160), top: Math.min(catContextMenu.y, window.innerHeight - 80) }}>
+            <button onClick={() => { setEditingCategory(catContextMenu.cat); setEditCategoryName(catContextMenu.cat); setCatContextMenu(null) }}
+              className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 flex items-center gap-2 transition-colors">
+              <Settings className="w-3.5 h-3.5 text-blue-400" />重命名
+            </button>
+            {categories.includes(catContextMenu.cat) && (
+              <button onClick={() => handleDeleteCategory(catContextMenu.cat)}
+                className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />删除标签
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </>
   )
 }
@@ -271,6 +438,13 @@ function ArchivedTab() {
   const [memoryContent, setMemoryContent] = useState<any[]>([])
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery) return projects
+    const q = searchQuery.toLowerCase()
+    return projects.filter((p: any) => p.name.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q))
+  }, [projects, searchQuery])
 
   const load = async () => {
     setLoading(true)
@@ -394,19 +568,26 @@ function ArchivedTab() {
 
       <div className="flex items-center justify-between mb-6">
         <p className="text-sm text-gray-400">已结案的工作流，可查看记忆总结或恢复为进行中</p>
-        <button onClick={load} className="p-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="刷新"><RefreshCw className="w-4 h-4" /></button>
+        <div className="flex items-center gap-2">
+          <div className="relative w-48">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="搜索工作流..."
+              className="w-full pl-8 pr-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500" />
+          </div>
+          <button onClick={load} className="p-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="刷新"><RefreshCw className="w-4 h-4" /></button>
+        </div>
       </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-gray-500 animate-spin" /></div>
-      ) : projects.length === 0 ? (
+      ) : filteredProjects.length === 0 ? (
         <div className="text-center py-12 bg-gray-900 border border-gray-800 rounded-xl">
-          <Archive className="w-12 h-12 text-gray-700 mx-auto mb-3" /><p className="text-gray-500">暂无完结工作流</p>
-          <p className="text-xs text-gray-600 mt-1">在工作流页面点击「结案归档」后会出现在这里</p>
+          <Archive className="w-12 h-12 text-gray-700 mx-auto mb-3" /><p className="text-gray-500">{searchQuery ? '未找到匹配的工作流' : '暂无完结工作流'}</p>
+          {!searchQuery && <p className="text-xs text-gray-600 mt-1">在工作流页面点击「结案归档」后会出现在这里</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map((p: any) => (
+          {filteredProjects.map((p: any) => (
             <div key={p.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors group">
               {/* Card header */}
               <div className="p-4 border-b border-gray-800">
@@ -486,6 +667,13 @@ function MediaTab({ type }: MediaTabProps) {
   const [loading, setLoading] = useState(true)
   const [configModal, setConfigModal] = useState<{ projectId: string; projectName: string } | null>(null)
   const [configPath, setConfigPath] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery) return projects
+    const q = searchQuery.toLowerCase()
+    return projects.filter((p: any) => p.name.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q))
+  }, [projects, searchQuery])
   const STORAGE_KEY = `media_paths_${type}`
 
   const icon = type === 'frames' ? Image : Users
@@ -551,19 +739,26 @@ function MediaTab({ type }: MediaTabProps) {
 
       <div className="flex items-center justify-between mb-6">
         <p className="text-sm text-gray-400">每个工作流的{label}资源，通过配置本地文件夹路径浏览</p>
-        <button onClick={load} className="p-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="刷新"><RefreshCw className="w-4 h-4" /></button>
+        <div className="flex items-center gap-2">
+          <div className="relative w-48">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={`搜索${label}...`}
+              className="w-full pl-8 pr-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500" />
+          </div>
+          <button onClick={load} className="p-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="刷新"><RefreshCw className="w-4 h-4" /></button>
+        </div>
       </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-gray-500 animate-spin" /></div>
-      ) : projects.length === 0 ? (
+      ) : filteredProjects.length === 0 ? (
         <div className="text-center py-12 bg-gray-900 border border-gray-800 rounded-xl">
-          <Icon className="w-12 h-12 text-gray-700 mx-auto mb-3" /><p className="text-gray-500">暂无工作流</p>
-          <p className="text-xs text-gray-600 mt-1">创建项目后可配置{label}路径</p>
+          <Icon className="w-12 h-12 text-gray-700 mx-auto mb-3" /><p className="text-gray-500">{searchQuery ? '未找到匹配的工作流' : '暂无工作流'}</p>
+          {!searchQuery && <p className="text-xs text-gray-600 mt-1">创建项目后可配置{label}路径</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map((p: any) => {
+          {filteredProjects.map((p: any) => {
             const path = getPath(p.id)
             return (
               <div key={p.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-gray-700 transition-colors group">

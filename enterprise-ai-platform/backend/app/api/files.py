@@ -253,7 +253,7 @@ async def browse_external_folder(
     body: BrowseFolderRequest,
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """浏览外部文件夹内容（返回与项目文件相同的树结构）"""
+    """浏览外部文件夹内容（递归扫描，返回完整树结构）"""
     raw_path = body.path.strip().rstrip('/')
     if not raw_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不能为空")
@@ -263,48 +263,54 @@ async def browse_external_folder(
     if not folder.is_dir():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不是文件夹")
 
-    files = []
-    dirs_set = set()
-    try:
-        for item in sorted(folder.iterdir()):
-            if item.name.startswith('.') or item.name == '.DS_Store':
-                continue
-            if item.is_dir():
-                rel = item.name
-                dirs_set.add(rel)
-            elif item.is_file():
-                try:
-                    stat = item.stat()
-                    files.append({
-                        "name": item.name,
-                        "relative_path": item.name,
-                        "stored_path": str(item),
-                        "size": stat.st_size,
-                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "ext": item.suffix.lower(),
-                    })
-                except OSError:
-                    continue
-    except PermissionError:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限访问该文件夹")
-
-    files.sort(key=lambda f: (0, f["name"]) if False else (f["name"]))
-
     tree: dict[str, list] = {"": []}
-    for d in sorted(dirs_set):
-        tree[""].append({
-            "name": d,
-            "relative_path": d,
-            "type": "directory",
-            "ext": "",
-            "size": 0,
-            "stored_path": str(folder / d),
-            "modified": "",
-        })
-    for f in files:
-        tree[""].append(f)
 
-    return {"path": str(folder), "name": folder.name, "files": files, "tree": build_tree(tree, "")}
+    def scan_dir(dir_path: Path, rel_prefix: str, depth: int = 0):
+        """递归扫描目录，深度限制为 5 层"""
+        if depth > 5:
+            return
+        try:
+            for item in sorted(dir_path.iterdir()):
+                if item.name.startswith('.') or item.name == '.DS_Store':
+                    continue
+                rel = f"{rel_prefix}/{item.name}" if rel_prefix else item.name
+                if item.is_dir():
+                    # 添加到父级的子列表
+                    parent_key = rel_prefix if rel_prefix else ""
+                    if parent_key not in tree:
+                        tree[parent_key] = []
+                    tree[parent_key].append({
+                        "name": item.name,
+                        "relative_path": rel,
+                        "type": "directory",
+                        "ext": "",
+                        "size": 0,
+                        "stored_path": str(item),
+                        "modified": "",
+                    })
+                    # 递归扫描子目录
+                    scan_dir(item, rel, depth + 1)
+                elif item.is_file():
+                    parent_key = rel_prefix if rel_prefix else ""
+                    if parent_key not in tree:
+                        tree[parent_key] = []
+                    try:
+                        stat = item.stat()
+                        tree[parent_key].append({
+                            "name": item.name,
+                            "relative_path": rel,
+                            "stored_path": str(item),
+                            "size": stat.st_size,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            "ext": item.suffix.lower(),
+                        })
+                    except OSError:
+                        continue
+        except PermissionError:
+            pass
+
+    scan_dir(folder, "")
+    return {"path": str(folder), "name": folder.name, "tree": build_tree(tree, "")}
 
 
 # ── 在 Finder 中打开文件位置 ──
@@ -445,3 +451,22 @@ async def pick_folder(
     except Exception as e:
         logger.error(f"[Files] pick-folder 失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/content")
+async def get_file_content(
+    path: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """提供文件内容（图片/视频预览用）"""
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    import mimetypes
+    content_type, _ = mimetypes.guess_type(str(file_path))
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    from fastapi.responses import FileResponse
+    return FileResponse(str(file_path), media_type=content_type)

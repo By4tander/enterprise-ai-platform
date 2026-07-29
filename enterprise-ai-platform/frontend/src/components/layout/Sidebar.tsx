@@ -163,7 +163,7 @@ export default function Sidebar() {
   }))
 
   const navItems = [
-    { icon: FolderOpen, label: '我的工作流', path: '/', active: location.pathname === '/' || location.pathname.startsWith('/project/') },
+    { icon: FolderOpen, label: '工作台', path: '/', active: location.pathname === '/' || location.pathname.startsWith('/project/') },
     { icon: Zap, label: 'Hermes 全局技能', path: '/global-skills', active: location.pathname === '/global-skills' },
     { icon: BookOpen, label: 'Agent 资源库', path: '/skills', active: location.pathname === '/skills' },
   ]

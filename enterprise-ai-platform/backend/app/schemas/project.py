@@ -24,6 +24,7 @@ class ProjectOut(BaseModel):
     archived_at: datetime | None = None
     message_count: int = 0
     artifact_count: int = 0
+    token_count: int = 0
 
     class Config:
         from_attributes = True

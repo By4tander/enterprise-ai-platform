@@ -66,6 +66,9 @@ async def list_projects(
         art_count = await db.execute(
             select(func.count(Artifact.id)).where(Artifact.project_id == proj.id)
         )
+        token_sum = await db.execute(
+            select(func.coalesce(func.sum(Message.tokens_used), 0)).where(Message.project_id == proj.id)
+        )
         out_list.append(ProjectOut(
             id=proj.id,
             name=proj.name,
@@ -80,8 +83,53 @@ async def list_projects(
             archived_at=proj.archived_at,
             message_count=msg_count.scalar() or 0,
             artifact_count=art_count.scalar() or 0,
+            token_count=token_sum.scalar() or 0,
         ))
     return out_list
+
+
+@router.get("/token-stats")
+async def get_token_stats(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """获取 token 消耗统计（最近 30 天，按天聚合）"""
+    from datetime import timedelta, date
+
+    today = date.today()
+    start_date = today - timedelta(days=30)
+
+    # Use raw SQL for reliable date extraction in SQLite
+    from sqlalchemy import text
+    result = await db.execute(
+        text("""
+            SELECT DATE(timestamp) as day, SUM(tokens_used) as tokens
+            FROM messages
+            WHERE tokens_used > 0 AND timestamp >= :start
+            GROUP BY DATE(timestamp)
+            ORDER BY DATE(timestamp)
+        """),
+        {"start": str(start_date)}
+    )
+    rows = result.all()
+
+    daily = {}
+    for row in rows:
+        daily[str(row[0])] = row[1] or 0
+
+    total_7d = sum(v for k, v in daily.items() if k >= str(today - timedelta(days=7)))
+    total_30d = sum(daily.values())
+    total_result = await db.execute(
+        text("SELECT COALESCE(SUM(tokens_used), 0) FROM messages")
+    )
+    total_all = total_result.scalar() or 0
+
+    return {
+        "daily": daily,
+        "total_7d": total_7d,
+        "total_30d": total_30d,
+        "total_all": total_all,
+    }
 
 
 @router.post("/", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

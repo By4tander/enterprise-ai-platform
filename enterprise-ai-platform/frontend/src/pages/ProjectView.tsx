@@ -6,6 +6,9 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, chatStream } from '../services/api'
 import { useAuthStore } from '../store'
+import ImageViewer from '../components/media/ImageViewer'
+import VideoPlayer from '../components/media/VideoPlayer'
+import FloatingWindow from '../components/media/FloatingWindow'
 import { useProjectSkills, skillSourceColor, extractHistorySkills } from '../hooks/useProjectSkills'
 import ChatInput from '../components/chat/ChatInput'
 import {
@@ -124,13 +127,14 @@ function getFileExt(filename: string): string {
   return idx >= 0 ? filename.slice(idx) : ''
 }
 
-function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onReveal, depth, iconViewPath, onIconViewNav }: {
+function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onReveal, onFileClick, depth, iconViewPath, onIconViewNav }: {
   nodes: any[]
   expanded: Set<string>
   onToggle: (path: string) => void
   viewMode: string
   onContextMenu: (e: React.MouseEvent, path: string) => void
   onReveal: (path: string) => void
+  onFileClick?: (path: string) => void
   depth: number
   iconViewPath: string[]
   onIconViewNav?: (path: string) => void
@@ -208,7 +212,7 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
                 }))
               }}
               onContextMenu={(e) => onContextMenu(e, f.stored_path)}
-              onClick={() => onReveal(f.stored_path)}
+              onClick={() => onFileClick ? onFileClick(f.stored_path) : onReveal(f.stored_path)}
               className="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-800/80 cursor-pointer group text-center">
               <File className={`w-7 h-7 ${fileIconColor(f.ext || '')}`} />
               <span className="text-[10px] text-gray-300 truncate w-full leading-tight">{f.name}</span>
@@ -247,7 +251,7 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
               {isOpen && node.children && (
                 <div className="pl-4">
                   <FileTreeNodes nodes={node.children} expanded={expanded} onToggle={onToggle}
-                    viewMode={viewMode} onContextMenu={onContextMenu} onReveal={onReveal} depth={depth + 1}
+                    viewMode={viewMode} onContextMenu={onContextMenu} onReveal={onReveal} onFileClick={onFileClick} depth={depth + 1}
                     iconViewPath={iconViewPath} onIconViewNav={onIconViewNav} />
                 </div>
               )}
@@ -266,7 +270,7 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
               }))
             }}
             onContextMenu={(e) => onContextMenu(e, node.stored_path)}
-            onClick={() => onReveal(node.stored_path)}
+            onClick={() => onFileClick ? onFileClick(node.stored_path) : onReveal(node.stored_path)}
             className="flex items-center gap-1.5 px-1 py-1 rounded hover:bg-gray-800/80 cursor-pointer group text-gray-300 hover:text-white transition-colors">
             <span className="w-3" />
             <File className={`w-3.5 h-3.5 shrink-0 ${fileIconColor(node.ext || '')}`} />
@@ -331,6 +335,7 @@ export default function ProjectView() {
     path: string
     tree: any[]
     expanded: Set<string>
+    viewMode: 'list' | 'icon'
     loading: boolean
     error: string
   }
@@ -361,6 +366,27 @@ export default function ProjectView() {
   const [bottomHeight, setBottomHeight] = useState(0)
   const [sectionHeights, setSectionHeights] = useState({ files: 180, skills: 160, artifacts: 0 }) // 0 = auto
   const resizeRef = useRef<{ target: string; startX: number; startY: number; startSize: number } | null>(null)
+
+  // ── 右侧面板配置（可拖拽排序、折叠、隐藏） ──
+  type PanelId = 'files' | 'skills' | 'artifacts'
+  const PANEL_TITLES: Record<PanelId, string> = { files: '文件检视', skills: '技能', artifacts: '产出' }
+  const PANEL_ICONS: Record<PanelId, any> = { files: FolderOpen, skills: BookOpen, artifacts: FileText }
+
+  const panelOrder: PanelId[] = ['files', 'skills', 'artifacts']
+  const [collapsedPanels, setCollapsedPanels] = useState<Set<PanelId>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('collapsed_panels') || '[]')) } catch { return new Set() }
+  })
+
+  // 持久化折叠状态
+  useEffect(() => { localStorage.setItem('collapsed_panels', JSON.stringify([...collapsedPanels])) }, [collapsedPanels])
+
+  const togglePanelCollapse = (id: PanelId) => {
+    setCollapsedPanels(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
   // Refs to track streaming content for onDone (avoids stale closure)
@@ -835,7 +861,7 @@ export default function ProjectView() {
     const folderName = folderPath.split('/').filter(Boolean).pop() || folderPath
     const newTab: ExternalFolderTab = {
       id: tabId, name: folderName, path: folderPath,
-      tree: [], expanded: new Set(['']), loading: true, error: ''
+      tree: [], expanded: new Set(['']), viewMode: 'list', loading: true, error: ''
     }
     setExternalTabs(prev => {
       const next = [...prev, newTab]
@@ -935,6 +961,26 @@ export default function ProjectView() {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, path })
   }
+  // ── 媒体预览 ──
+  const [previewImage, setPreviewImage] = useState<{ src: string; name: string } | null>(null)
+  const [videoSrc, setVideoSrc] = useState<{ src: string; name: string } | null>(null)
+  const [videoPopped, setVideoPopped] = useState(false)
+
+  const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.tiff', '.avif'])
+  const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'])
+
+  const handleFileClick = (path: string) => {
+    const ext = path.includes('.') ? '.' + path.split('.').pop()!.toLowerCase() : ''
+    if (IMAGE_EXTS.has(ext)) {
+      setPreviewImage({ src: `/api/files/content?path=${encodeURIComponent(path)}`, name: path.split('/').pop() || '' })
+    } else if (VIDEO_EXTS.has(ext)) {
+      setVideoSrc({ src: `/api/files/content?path=${encodeURIComponent(path)}`, name: path.split('/').pop() || '' })
+      setVideoPopped(false)
+    } else {
+      handleRevealInFinder(path)
+    }
+  }
+
   const handleRevealInFinder = async (path: string) => {
     try { await api.revealInFinder(path) } catch (e: any) { alert(e.message) }
     setContextMenu(null)
@@ -1232,10 +1278,15 @@ export default function ProjectView() {
           )}
           {messages.length === 0 && !streaming && (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
-              <Bot className="w-12 h-12 mb-3 text-gray-500" />
-              <p className="text-sm text-gray-300">开始与 AI 对话</p>
-              <p className="text-xs mt-1 text-gray-400">输入您的问题，AI 将借助部门沉淀技能为您服务</p>
-              <p className="text-xs mt-3 text-gray-500">可用原生技能: {nativeSkills.length} 个 · 部门技能: {deptSkills.length} 个</p>
+              <Bot className="w-12 h-12 mb-4 text-gray-500" />
+              <p className="text-sm text-gray-300 mb-2">开始与 AI 对话</p>
+              <div className="text-xs text-gray-500 space-y-1 text-center max-w-xs">
+                <p>先把项目相关背景设定或文件路径发给我</p>
+                <p>记得启用技能，效果会更好</p>
+              </div>
+              <p className="text-[10px] mt-4 text-gray-600">
+                已加载 {nativeSkills.length} 个系统技能 · {deptSkillGroups.length} 个部门技能
+              </p>
             </div>
           )}
 
@@ -1819,7 +1870,35 @@ export default function ProjectView() {
         style={{ width: rightWidth }}
         onDragOver={handleGlobalDragOver}
       >
+        {/* Panel Toolbar — 可拖拽排序、折叠 */}
+        <div className="shrink-0 px-3 py-2 border-b border-gray-800 flex items-center gap-1.5 overflow-x-auto">
+          {panelOrder.map((pid) => {
+            const Icon = PANEL_ICONS[pid]
+            const isCollapsed = collapsedPanels.has(pid)
+            const colorMap: Record<PanelId, { active: string; inactive: string }> = {
+              files:    { active: 'bg-green-500/15 text-green-300 border-green-500/30', inactive: 'text-green-400/50 border-transparent hover:text-green-300 hover:bg-green-500/10' },
+              skills:   { active: 'bg-blue-500/15 text-blue-300 border-blue-500/30', inactive: 'text-blue-400/50 border-transparent hover:text-blue-300 hover:bg-blue-500/10' },
+              artifacts:{ active: 'bg-amber-500/15 text-amber-300 border-amber-500/30', inactive: 'text-amber-400/50 border-transparent hover:text-amber-300 hover:bg-amber-500/10' },
+            }
+            const colors = colorMap[pid]
+            return (
+              <button
+                key={pid}
+                onClick={() => togglePanelCollapse(pid)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border transition-all shrink-0 ${
+                  isCollapsed ? colors.inactive : colors.active
+                }`}
+                title={isCollapsed ? `展开${PANEL_TITLES[pid]}` : `折叠${PANEL_TITLES[pid]}`}
+              >
+                <Icon className="w-3 h-3" />
+                {PANEL_TITLES[pid]}
+              </button>
+            )
+          })}
+        </div>
+
         {/* File Browser — 标签页系统 */}
+        {!collapsedPanels.has('files') && (
         <div className="p-4 border-b border-gray-800 shrink-0" style={{ height: sectionHeights.files > 0 ? sectionHeights.files : 'auto', minHeight: 60, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Tab bar */}
           <div className="flex items-center gap-1 mb-2 shrink-0 overflow-x-auto">
@@ -1852,10 +1931,10 @@ export default function ProjectView() {
                 {/* Close button */}
                 <button
                   onClick={(e) => { e.stopPropagation(); closeExternalTab(tab.id) }}
-                  className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/tab:opacity-100 transition-opacity shadow-sm"
+                  className="absolute top-0 right-0 w-3 h-3 rounded-full bg-red-500/90 text-white flex items-center justify-center opacity-0 group-hover/tab:opacity-100 transition-opacity z-10"
                   title="关闭"
                 >
-                  <X className="w-2.5 h-2.5" />
+                  <X className="w-2 h-2" />
                 </button>
               </div>
             ))}
@@ -1886,6 +1965,22 @@ export default function ProjectView() {
                   </button>
                 </>
               )}
+              {activeFileTab !== 'project' && (() => {
+                const tab = externalTabs.find(t => t.id === activeFileTab)
+                if (!tab) return null
+                return (
+                  <>
+                    <button onClick={() => setExternalTabs(prev => prev.map(t => t.id === activeFileTab ? { ...t, viewMode: 'list' } : t))}
+                      className={`p-1 rounded ${tab.viewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
+                      <List className="w-3 h-3" />
+                    </button>
+                    <button onClick={() => setExternalTabs(prev => prev.map(t => t.id === activeFileTab ? { ...t, viewMode: 'icon' } : t))}
+                      className={`p-1 rounded ${tab.viewMode === 'icon' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
+                      <Grid3X3 className="w-3 h-3" />
+                    </button>
+                  </>
+                )
+              })()}
             </div>
           </div>
 
@@ -1908,6 +2003,7 @@ export default function ProjectView() {
                   viewMode={fileViewMode}
                   onContextMenu={handleContextMenu}
                   onReveal={handleRevealInFinder}
+                  onFileClick={handleFileClick}
                   depth={0}
                   iconViewPath={iconViewPath}
                   onIconViewNav={(p) => setIconViewPath(p ? p.split('/') : [])}
@@ -1935,16 +2031,21 @@ export default function ProjectView() {
                   </div>
                 )
                 return (
-                  <FileTreeNodes
-                    nodes={tab.tree}
-                    expanded={tab.expanded}
-                    onToggle={(path) => toggleExternalExpand(tab.id, path)}
-                    viewMode="list"
-                    onContextMenu={handleContextMenu}
-                    onReveal={handleRevealInFinder}
-                    depth={0}
-                    iconViewPath={[]}
-                  />
+                  <>
+                    <div className="flex-1 overflow-y-auto">
+                      <FileTreeNodes
+                        nodes={tab.tree}
+                        expanded={tab.expanded}
+                        onToggle={(path) => toggleExternalExpand(tab.id, path)}
+                        viewMode={tab.viewMode}
+                        onContextMenu={handleContextMenu}
+                        onReveal={handleRevealInFinder}
+                        onFileClick={handleFileClick}
+                        depth={0}
+                        iconViewPath={[]}
+                      />
+                    </div>
+                  </>
                 )
               })()
             )}
@@ -1953,6 +2054,7 @@ export default function ProjectView() {
             拖拽文件到左侧对话框 · 右键在访达中打开
           </p>
         </div>
+        )}
 
         {/* Section resize handle: files ↔ skills */}
         <div
@@ -1963,6 +2065,7 @@ export default function ProjectView() {
         </div>
 
         {/* Department Skills */}
+        {!collapsedPanels.has('skills') && (
         <div className="p-4 border-b border-gray-800 shrink-0" style={{ height: sectionHeights.skills > 0 ? sectionHeights.skills : 'auto', minHeight: 60, display: 'flex', flexDirection: 'column' }}>
           <div className="shrink-0 mb-3">
           <h3 className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex items-center gap-2">
@@ -2075,6 +2178,7 @@ export default function ProjectView() {
             </div>
           )}
           </div>
+        )}
 
         {/* Section resize handle: skills ↔ artifacts */}
         <div
@@ -2085,6 +2189,7 @@ export default function ProjectView() {
         </div>
 
         {/* Artifacts — 工作流产出物 (with file type filter) */}
+        {!collapsedPanels.has('artifacts') && (
         <div className="p-4 flex-1 flex flex-col min-h-0" style={{ overflow: 'hidden' }}>
           {(() => {
             const allWithPaths = artifacts.filter((a: any) => a.artifact_path)
@@ -2223,6 +2328,8 @@ export default function ProjectView() {
             )
           })()}
         </div>
+        )}
+
       </div>
 
       {globalDragOver && (
@@ -2525,6 +2632,48 @@ export default function ProjectView() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── 图片预览 ── */}
+      {previewImage && (
+        <ImageViewer
+          src={previewImage.src}
+          filename={previewImage.name}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
+
+      {/* ── 视频播放（全屏遮罩 + 居中播放器） ── */}
+      {videoSrc && !videoPopped && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) setVideoSrc(null) }}
+        >
+          <div className="relative" style={{ width: '60vw', height: '70vh', maxWidth: 960, maxHeight: 640 }}>
+            <VideoPlayer
+              src={videoSrc.src}
+              filename={videoSrc.name}
+              onPopOut={() => setVideoPopped(true)}
+              onClose={() => setVideoSrc(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── 视频画中画浮动窗口 ── */}
+      {videoSrc && videoPopped && (
+        <FloatingWindow
+          title={videoSrc.name}
+          onClose={() => setVideoPopped(false)}
+          initialWidth={520}
+          initialHeight={380}
+        >
+          <VideoPlayer
+            src={videoSrc.src}
+            filename={videoSrc.name}
+            onClose={() => { setVideoPopped(false); setVideoSrc(null) }}
+            compact
+          />
+        </FloatingWindow>
       )}
     </div>
   )
