@@ -460,22 +460,23 @@ function ModelTab() {
   const [error, setError] = useState('')
   const [switching, setSwitching] = useState(false)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState({ provider: 'deepseek', model: '', display_name: '', thinking: false, base_url: '' })
+  const [adding, setAdding] = useState(false)
 
-  useEffect(() => {
+  const reloadModels = () => {
     setLoading(true)
-    setError('')
     api.getAvailableModels().then(data => {
-      const list = data.models || []
-      setModels(list)
+      setModels(data.models || [])
       setCurrent(data.current || { model: '', provider: '' })
-      if (list.length > 0) {
-        const active = list.find((m: any) => m.active)
+      if (data.models?.length > 0) {
+        const active = data.models.find((m: any) => m.active)
         if (active) setExpanded({ [active.provider]: true })
       }
-    }).catch((e: any) => {
-      setError('加载模型失败: ' + (e.message || '请确认后端服务正常'))
-    }).finally(() => setLoading(false))
-  }, [])
+    }).catch((e: any) => setError(e.message || '加载失败')).finally(() => setLoading(false))
+  }
+
+  useEffect(() => { reloadModels() }, [])
 
   const handleSwitch = async (model: any) => {
     if (model.active) return
@@ -488,6 +489,28 @@ function ModelTab() {
     } catch (e: any) {
       alert('切换失败: ' + (e.message || '未知错误'))
     } finally { setSwitching(false) }
+  }
+
+  const handleAddModel = async () => {
+    if (!addForm.model.trim() || !addForm.provider.trim()) return
+    setAdding(true)
+    try {
+      await api.addCustomModel({
+        model: addForm.model.trim(), provider: addForm.provider.trim(),
+        display_name: addForm.display_name.trim(), thinking: addForm.thinking, base_url: addForm.base_url.trim(),
+      })
+      setShowAdd(false)
+      setAddForm({ provider: 'deepseek', model: '', display_name: '', thinking: false, base_url: '' })
+      reloadModels()
+    } catch (e: any) { alert(e.message || '添加失败') }
+    finally { setAdding(false) }
+  }
+
+  const handleDeleteCustom = async (model: any) => {
+    if (!confirm(`确定删除「${model.label}」？`)) return
+    const cid = model.id.startsWith('db:') ? model.id.slice(3) : model.id
+    await api.deleteCustomModel(cid)
+    reloadModels()
   }
 
   // Group models by provider
@@ -504,8 +527,83 @@ function ModelTab() {
 
   return (
     <div className="p-6">
-      <h2 className="text-lg font-semibold text-white mb-2">模型配置</h2>
-      <p className="text-xs text-gray-500 mb-6">模型由 Hermes 管理，自动检测可用模型。API Key 安全存储在后端。</p>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-semibold text-white">模型配置</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={reloadModels} title="刷新检测模型"
+            className="p-1.5 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-gray-200 transition-colors">
+            <Loader2 className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs rounded-lg transition-colors">
+            <Plus className="w-3 h-3" />添加模型
+          </button>
+        </div>
+      </div>
+      <div className="mb-6 p-3 rounded-xl border border-blue-500/20 bg-blue-500/5">
+        <p className="text-xs text-blue-400 leading-relaxed">
+          ⚡ 此处选择的是<strong>全局默认模型</strong>（新工作流的初始模型）。
+          每个工作流可以在对话界面独立切换模型，不会受此处设置影响。
+          已存在的工作流各自保留已选模型，互不干扰。
+        </p>
+      </div>
+
+      {/* Add Model Form */}
+      {showAdd && (
+        <div className="mb-4 p-4 bg-gray-800/50 border border-gray-700 rounded-xl space-y-3">
+          <h3 className="text-sm font-medium text-gray-300">添加自定义模型</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-gray-500 mb-1 block">提供商</label>
+              <select value={addForm.provider} onChange={e => setAddForm(p => ({ ...p, provider: e.target.value }))}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                <option value="deepseek">DeepSeek</option>
+                <option value="dashscope">通义千问 (DashScope)</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="ollama">Ollama (本地)</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 mb-1 block">模型名称 *</label>
+              <input value={addForm.model} onChange={e => setAddForm(p => ({ ...p, model: e.target.value }))}
+                placeholder="deepseek-v4-pro"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 font-mono" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-gray-500 mb-1 block">显示名称（可选）</label>
+              <input value={addForm.display_name} onChange={e => setAddForm(p => ({ ...p, display_name: e.target.value }))}
+                placeholder="我的模型"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-2.5 py-1.5 text-xs text-gray-200" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 mb-1 block">API 地址（可选）</label>
+              <input value={addForm.base_url} onChange={e => setAddForm(p => ({ ...p, base_url: e.target.value }))}
+                placeholder="https://..."
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 font-mono" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={addForm.thinking} onChange={e => setAddForm(p => ({ ...p, thinking: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded bg-gray-700 border-gray-600 accent-indigo-500" />
+              <span className="text-[11px] text-gray-400">启用思考模式 (reasoning_effort=max)</span>
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => setShowAdd(false)}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">取消</button>
+            <button onClick={handleAddModel} disabled={adding || !addForm.model.trim()}
+              className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs rounded-lg">
+              {adding ? '添加中...' : '保存'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-gray-500 animate-spin" /></div>
@@ -548,6 +646,11 @@ function ModelTab() {
                           <span className={`text-xs ${m.active ? 'text-indigo-400 font-medium' : 'text-gray-700 dark:text-gray-300'}`}>{m.label}</span>
                           {m.thinking && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400">思考</span>}
                           {m.active && <span className="text-[10px] px-1.5 py-0.5 rounded-full model-badge-active">当前</span>}
+                          {m.can_delete !== false && (
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteCustom(m) }}
+                              className="p-0.5 rounded hover:bg-red-500/10 text-gray-500 hover:text-red-400"
+                              title="删除"><X className="w-3 h-3" /></button>
+                          )}
                         </div>
                         <p className="text-[10px] text-gray-500">{m.name}</p>
                       </div>

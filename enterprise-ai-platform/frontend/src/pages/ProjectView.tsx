@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { useStreamStore } from '../store/streamStore'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, chatStream } from '../services/api'
 import { useAuthStore, useVideoStore } from '../store'
@@ -17,7 +18,7 @@ import {
   Loader2, Bot, User, Sparkles, AlertCircle, Copy, X, Zap,
   Activity, Cpu, Clock, BarChart3, Wrench, Brain, Pause, Play,
   FolderOpen, Grid3X3, List, Folder, File, FolderTree, ExternalLink, Check,
-  Search, Plus, XCircle, Info, Paperclip, GripVertical, Pencil, Square, ArrowUp, FolderInput, RefreshCw
+  Search, Plus, XCircle, Info, Paperclip, GripVertical, Pencil, Square, ArrowUp, FolderInput, RefreshCw, ChevronLeft
 } from 'lucide-react'
 
 interface MessageAttachment {
@@ -78,6 +79,8 @@ interface LockState {
   editor_display_name?: string
   is_me: boolean
   is_admin: boolean
+  is_dept_admin: boolean
+  can_takeover: boolean
 }
 
 interface TransferRequestItem {
@@ -285,17 +288,31 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
 }
 
 // ── Model Switcher Component ──
-function ModelSwitcher({ hermesModel, hermesProvider, streaming }: { hermesModel: string; hermesProvider: string; streaming: boolean }) {
+function ModelSwitcher({ hermesModel, hermesProvider, streaming, projectId }: { hermesModel: string; hermesProvider: string; streaming: boolean; projectId?: string }) {
   const [models, setModels] = useState<any[]>([])
   const [current, setCurrent] = useState<{ model: string; provider: string }>({ model: '', provider: '' })
   const [showDropdown, setShowDropdown] = useState(false)
+  const [dExpanded, setDExpanded] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    api.getAvailableModels().then(d => {
-      setModels(d.models || [])
-      setCurrent(d.current || { model: '', provider: '' })
+    // Load available models + project preference
+    Promise.all([
+      api.getAvailableModels(),
+      projectId ? api.getProjectModel(projectId).catch(() => null) : Promise.resolve(null),
+    ]).then(([avail, projModel]) => {
+      setModels(avail.models || [])
+      if (projModel && projModel.model && !projModel.is_global) {
+        // Validate project model is still in available list (prevents stale/deprecated models)
+        const valid = (avail.models || []).some((m: any) => m.name === projModel.model && m.provider === projModel.provider)
+        setCurrent(valid
+          ? { model: projModel.model, provider: projModel.provider }
+          : (avail.current || { model: '', provider: '' })
+        )
+      } else {
+        setCurrent(avail.current || { model: '', provider: '' })
+      }
     }).catch(() => {})
-  }, [])
+  }, [projectId])
 
   // Show Hermes model when streaming, otherwise show configured model
   const displayModel = streaming && hermesModel && hermesModel !== '--' ? hermesModel : (current.model || '—')
@@ -303,9 +320,13 @@ function ModelSwitcher({ hermesModel, hermesProvider, streaming }: { hermesModel
 
   const handleSwitch = async (model: any) => {
     if (model.active) { setShowDropdown(false); return }
-    const oldName = current.model
+    const oldName = current.model || ''
     try {
+      // Save to global config (immediate effect) AND project preference (persistent)
       await api.switchModel({ model: model.name, provider: model.provider, thinking: model.thinking, thinking_effort: model.thinking_effort })
+      if (projectId) {
+        await api.setProjectModel(projectId, { model: model.name, provider: model.provider, thinking: model.thinking }).catch(() => {})
+      }
       setModels(prev => prev.map(m => ({ ...m, active: m.id === model.id })))
       setCurrent({ model: model.name, provider: model.provider })
       setShowDropdown(false)
@@ -314,8 +335,6 @@ function ModelSwitcher({ hermesModel, hermesProvider, streaming }: { hermesModel
       alert('切换失败')
     }
   }
-
-  const activeModels = models.filter(m => m.active)
 
   return (
     <div className="relative">
@@ -328,21 +347,33 @@ function ModelSwitcher({ hermesModel, hermesProvider, streaming }: { hermesModel
       {showDropdown && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setShowDropdown(false)} />
-          <div className="absolute left-0 top-full mt-1 w-52 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-20 py-1 max-h-64 overflow-y-auto">
+          <div className="absolute left-0 top-full mt-1 w-56 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-20 py-1 max-h-72 overflow-y-auto">
             <div className="px-3 py-1.5 border-b border-gray-700">
               <p className="text-[10px] text-gray-500">切换模型</p>
             </div>
-            {models.length > 0 ? models.map(m => (
-              <button key={m.id} onClick={() => handleSwitch(m)}
-                className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 transition-colors ${
-                  m.active ? 'bg-indigo-500/10 text-indigo-400' : 'text-gray-300 hover:bg-gray-700'
-                }`}>
-                <span className="flex-1 truncate">{m.label || m.name}</span>
-                {m.thinking && <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded-full">思考</span>}
-                <span className="text-[10px] text-gray-600">{m.provider}</span>
-                {m.active && <Check className="w-3 h-3 text-indigo-400" />}
-              </button>
-            )) : (
+            {models.length > 0 ? (() => {
+              const grouped: Record<string, any[]> = {}
+              models.forEach(m => { if (!grouped[m.provider]) grouped[m.provider] = []; grouped[m.provider].push(m) })
+              const providerNames: Record<string, string> = { deepseek: 'DeepSeek', dashscope: '通义千问', openai: 'OpenAI', anthropic: 'Anthropic' }
+              return Object.entries(grouped).map(([provider, pModels]) => [
+                <button key={provider} onClick={() => setDExpanded(prev => ({ ...prev, [provider]: !prev[provider] }))}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-gray-700/50 transition-colors">
+                  <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${dExpanded[provider] ? '' : '-rotate-90'}`} />
+                  <span className="text-xs font-medium text-gray-300">{providerNames[provider] || provider}</span>
+                  <span className="text-[10px] text-gray-600 ml-auto">{pModels.length}</span>
+                </button>,
+                dExpanded[provider] && pModels.map((m: any) => (
+                  <button key={m.id} onClick={() => handleSwitch(m)}
+                    className={`w-full pl-8 pr-3 py-1.5 text-left text-xs flex items-center gap-2 transition-colors ${
+                      m.active ? 'bg-indigo-500/10 text-indigo-400' : 'text-gray-300 hover:bg-gray-700'
+                    }`}>
+                    <span className="flex-1 truncate">{m.label || m.name}</span>
+                    {m.thinking && <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded-full shrink-0">思考</span>}
+                    {m.active && <Check className="w-3 h-3 text-indigo-400 shrink-0" />}
+                  </button>
+                ))
+              ].flat())
+            })() : (
               <p className="px-3 py-2 text-[10px] text-gray-600">无可用模型</p>
             )}
           </div>
@@ -367,15 +398,46 @@ export default function ProjectView() {
   const inputCacheRef = useRef<Record<string, string>>({}) // deprecated, using localStorage
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [streaming, setStreaming] = useState(false)
-  const [streamContent, setStreamContent] = useState('')
-  const [streamThinking, setStreamThinking] = useState('')
+  const [streaming, setStreaming] = useState(() => {
+    const st = useStreamStore.getState().streams[projectId || '']
+    return st?.streaming || false
+  })
+  const [streamContent, setStreamContent] = useState(() => {
+    const st = useStreamStore.getState().streams[projectId || '']
+    return st?.content || ''
+  })
+  const [streamThinking, setStreamThinking] = useState(() => {
+    const st = useStreamStore.getState().streams[projectId || '']
+    return st?.thinking || ''
+  })
+
+  // ── 从 store 持续同步（跨页面切换保持） ──
+  const streamState = useStreamStore(s => s.streams[projectId || ''])
+  useEffect(() => {
+    if (!streamState) return
+    if (streamState.streaming) {
+      setStreaming(true)
+      setStreamContent(streamState.content)
+      setStreamThinking(streamState.thinking)
+      setHermesStatus(prev => ({
+        ...prev,
+        status: streamState.status || '推理中...',
+        model: streamState.model || prev.model,
+        provider: streamState.provider || prev.provider,
+        tokensUsed: streamState.tokensUsed || prev.tokensUsed,
+      }))
+    }
+  }, [streamState?.content, streamState?.thinking, streamState?.status, streamState?.streaming])
   const [showThinking, setShowThinking] = useState(true)
   const [previewArtifact, setPreviewArtifact] = useState<Artifact | null>(null)
   const [showMention, setShowMention] = useState(false)
   const [mentionFilter, setMentionFilter] = useState('')
-  const [hermesStatus, setHermesStatus] = useState<HermesStatus>({
-    model: '--', provider: '--', tokensUsed: 0, inputTokens: 0, outputTokens: 0, elapsed: 0, status: '空闲'
+  const [hermesStatus, setHermesStatus] = useState<HermesStatus>(() => {
+    const st = useStreamStore.getState().streams[projectId || '']
+    if (st?.streaming) {
+      return { model: st.model || '--', provider: st.provider || '--', tokensUsed: st.tokensUsed, inputTokens: 0, outputTokens: 0, elapsed: 0, status: st.status || '推理中...' }
+    }
+    return { model: '--', provider: '--', tokensUsed: 0, inputTokens: 0, outputTokens: 0, elapsed: 0, status: '空闲' }
   })
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
   const [totalMessages, setTotalMessages] = useState(0)
@@ -548,6 +610,20 @@ export default function ProjectView() {
       const msgData = msgs?.messages || msgs
       const msgList = Array.isArray(msgData) ? msgData : []
       setMessages(msgList)
+      // 如果最后一条是用户消息且没有 agent 回复 → agent 可能在后台工作中
+      if (msgList.length > 0) {
+        const last = msgList[msgList.length - 1]
+        if (last.sender_type === 'user') {
+          // Check store first
+          const st = useStreamStore.getState().streams[projectId]
+          if (st?.streaming) {
+            setStreaming(true)
+            setStreamContent(st.content)
+            setStreamThinking(st.thinking)
+            setHermesStatus(prev => ({ ...prev, status: '推理中...' }))
+          }
+        }
+      }
       setHasMoreMessages(msgs?.has_more || false)
       setTotalMessages(msgs?.total || msgList.length)
       // 从消息历史中累计 token 总数
@@ -571,16 +647,27 @@ export default function ProjectView() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  // ── 挂载后检测是否需要恢复流 ──
+  useEffect(() => {
+    if (!projectId || loading) return
+    const st = useStreamStore.getState().streams[projectId]
+    if (st?.streaming) {
+      // Store says agent is working → show it
+      setStreaming(true)
+      setStreamContent(st.content)
+      setStreamThinking(st.thinking)
+      setHermesStatus(prev => ({ ...prev, status: st.status || '推理中...', model: st.model || prev.model, provider: st.provider || prev.provider }))
+    }
+  }, [projectId, loading])
+
   // ── 检测是否有后台流完成后需要刷新消息 ──
   useEffect(() => {
     if (!projectId) return
     const streamKey = `active_stream_${projectId}`
     const checkAndReload = () => {
       if (localStorage.getItem(streamKey) === '1') {
-        // 有活跃流在后台运行，定期检查是否完成
         const poll = setInterval(() => {
           if (localStorage.getItem(streamKey) !== '1') {
-            // 流已完成，重新加载消息
             clearInterval(poll)
             loadData()
           }
@@ -590,6 +677,73 @@ export default function ProjectView() {
     }
     return checkAndReload()
   }, [projectId])
+
+  // ── 自动恢复后台对话（最高优先级，在渲染前执行） ──
+  const [resumeStatus, setResumeStatus] = useState('')
+  const [resumedOnce, setResumedOnce] = useState(false)
+  useEffect(() => {
+    if (!projectId || resumedOnce) return
+    let cancelled = false
+    setResumedOnce(true)
+    ;(async () => {
+      try {
+        const status = await api.getChatStatus(projectId)
+        if (status.status === 'running') {
+          setResumeStatus('正在恢复对话...')
+          setStreaming(true)
+          setHermesStatus(prev => ({ ...prev, status: '正在恢复...', model: prev.model || '', provider: prev.provider || '' }))
+          const ls = await api.getLockStatus(projectId)
+          setLockState(ls)
+          api.resumeChat(projectId, {
+            onContent: (c) => { if (!cancelled) { setStreamContent(prev => prev + c); streamContentRef.current += c } },
+            onThinking: (t) => { if (!cancelled) { setStreamThinking(prev => prev + t); streamThinkingRef.current += t } },
+            onContext: (ctx: any) => {
+              if (cancelled) return
+              try {
+                const c = typeof ctx === 'string' ? JSON.parse(ctx) : ctx
+                setHermesStatus(prev => ({ ...prev, model: c.model || prev.model, provider: c.provider || prev.provider, status: '推理中...', tokensUsed: prev.tokensUsed + (c.tokens_used || 0) }))
+              } catch {}
+            },
+            onDone: (data: any) => {
+              if (cancelled) return
+              setStreaming(false)
+              setHermesStatus(prev => ({ ...prev, status: '空闲', elapsed: 0 }))
+              setResumeStatus('')
+              localStorage.removeItem(`active_stream_${projectId}`)
+              if (!data._no_task) loadData()
+            },
+            onError: (msg: string) => {
+              if (cancelled) return
+              setStreaming(false)
+              setHermesStatus(prev => ({ ...prev, status: '空闲' }))
+              setResumeStatus('')
+            },
+            onStatus: (msg: string) => { if (!cancelled) setHermesStatus(prev => ({ ...prev, status: msg })) },
+          })
+        }
+      } catch {}
+    })()
+    return () => { cancelled = true }
+  }, [projectId])
+
+  // 每次 tab 激活/切回时也检查
+  useEffect(() => {
+    if (!projectId) return
+    const handler = () => {
+      api.getChatStatus(projectId).then(status => {
+        if (status.status === 'running' && !streaming) {
+          // Force re-trigger resume
+          setResumedOnce(false)
+        }
+      }).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', handler)
+    window.addEventListener('focus', handler)
+    return () => {
+      document.removeEventListener('visibilitychange', handler)
+      window.removeEventListener('focus', handler)
+    }
+  }, [projectId, streaming])
 
   // ── 自动刷新右侧文件和产出物（每 15 秒） ──
   const refreshFiles = useCallback(async () => {
@@ -665,6 +819,8 @@ export default function ProjectView() {
   }, [projectId])
 
   // ── 项目技能 — search hook (no more localStorage-based projectSkills) ──
+  const [deptCategoryFilter, setDeptCategoryFilter] = useState('') // '' = 全部
+
   const {
     showSkillSearch, setShowSkillSearch,
     skillSearchQuery, setSkillSearchQuery,
@@ -746,88 +902,32 @@ export default function ProjectView() {
     const streamKey = `active_stream_${projectId}`
     localStorage.setItem(streamKey, '1')
 
-    const controller = chatStream(projectId, fullContent, {
-      onStatus: (msg) => {
-        setHermesStatus(prev => ({ ...prev, status: msg }))
-      },
-      onContext: (data) => {
-        try {
-          const ctx = JSON.parse(data)
-          setHermesStatus(prev => {
-            // 对话完成时（elapsed_seconds > 0），累加 token 到总数
-            const newTokens = ctx.elapsed_seconds > 0 && ctx.tokens_used > 0
-              ? prev.tokensUsed + ctx.tokens_used
-              : prev.tokensUsed
-            return {
-              ...prev,
-              model: ctx.model || prev.model,
-              provider: ctx.provider || prev.provider,
-              tokensUsed: newTokens,
-              inputTokens: ctx.input_tokens || prev.inputTokens,
-              outputTokens: ctx.output_tokens || prev.outputTokens,
-              elapsed: ctx.elapsed_seconds || prev.elapsed,
-              status: ctx.elapsed_seconds > 0 ? '完成' : '推理中...',
-            }
-          })
-        } catch {}
-      },
-      onContent: (chunk) => {
-        streamContentRef.current += chunk
-        setStreamContent((prev) => prev + chunk)
-      },
-      onThinking: (chunk) => {
-        streamThinkingRef.current += chunk
-        setStreamThinking((prev) => prev + chunk)
-      },
-      onToolCall: (data) => {
-        try {
-          const tc = JSON.parse(data)
-          streamContentRef.current += `\n\n> 🔧 调用工具: **${tc.tool}**\n`
-          setStreamContent((prev) => prev + `\n\n> 🔧 调用工具: **${tc.tool}**\n`)
-        } catch {}
-      },
-      onDone: (messageId) => {
-        const finalContent = streamContentRef.current
-        const finalThinking = streamThinkingRef.current || null
-        setMessages((msgs) => [...msgs, {
-          id: messageId || `agent-${Date.now()}`,
-          sender_type: 'agent',
-          sender_name: 'hermes-agent',
-          content: finalContent,
-          thinking_content: finalThinking,
-          timestamp: new Date().toISOString(),
-        }])
+    // 使用全局 store 启动 SSE（跨页面切换不中断）
+    useStreamStore.getState().startStream(projectId, fullContent, filePaths)
+    setStreaming(true)
+    setConnectionHealth('connected')
+    setConnectionError(null)
+
+  }
+
+  // ── 永久 stream-done 监听（跨页面切换不丢失） ──
+  useEffect(() => {
+    if (!projectId) return
+    const handler = (e: CustomEvent) => {
+      if (e.detail.projectId === projectId) {
         setStreaming(false)
         setStreamContent('')
         setStreamThinking('')
-        streamContentRef.current = ''
-        streamThinkingRef.current = ''
+        localStorage.removeItem(`active_stream_${projectId}`)
         setHermesStatus(prev => ({ ...prev, status: '空闲', elapsed: 0 }))
-        // 清除活跃流标记
-        if (projectId) localStorage.removeItem(`active_stream_${projectId}`)
-        // Silently refresh artifacts in background
-        setTimeout(() => {
-          if (!projectId) return
-          api.getArtifacts(projectId).then(setArtifacts).catch(() => {})
-        }, 500)
-        // ── 标记待自动发送（由 useEffect 处理） ──
+        loadData()  // 重新加载消息列表（包含新回复）
+        setTimeout(() => api.getArtifacts(projectId).then(setArtifacts).catch(() => {}), 500)
         autoSendPendingRef.current = true
-      },
-      onError: (err) => {
-        streamContentRef.current += `\n\n> ⚠️ 错误: ${err}`
-        setStreamContent((prev) => prev + `\n\n> ⚠️ 错误: ${err}`)
-        setStreaming(false)
-        setConnectionHealth('error')
-        setConnectionError(err)
-        if (projectId) localStorage.removeItem(`active_stream_${projectId}`)
-        setHermesStatus(prev => ({ ...prev, status: '错误' }))
-      },
-      onHealthChange: (status) => {
-        setConnectionHealth(status)
-      },
-    }, filePaths, attachmentMeta.length > 0 ? attachmentMeta : undefined)
-    streamAbortRef.current = controller
-  }
+      }
+    }
+    window.addEventListener('stream-done', handler as EventListener)
+    return () => window.removeEventListener('stream-done', handler as EventListener)
+  }, [projectId, loadData])
 
   // ── 发送/排队入口 ──
   const handleSend = async (text: string, files?: any[]) => {
@@ -1041,7 +1141,6 @@ export default function ProjectView() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       setModelSwitchMsg(`模型已由 ${detail.from} 切换为 ${detail.to}`)
-      setTimeout(() => setModelSwitchMsg(null), 5000)
     }
     window.addEventListener('model-switched', handler)
     return () => window.removeEventListener('model-switched', handler)
@@ -1167,27 +1266,48 @@ export default function ProjectView() {
   const nativeSkills = skills.filter(s => s.is_native)
   const deptSkills = skills.filter(s => !s.is_native)
 
-  // Group department skills by ZIP source
+  // Group department skills by ZIP source — only show main skills (yaml_frontmatter/manual)
   const deptSkillGroups = (() => {
-    const groups = new Map<string, { name: string; main: any; subs: any[]; totalUsage: number }>()
-    const ungrouped: { name: string; main: any; subs: any[]; totalUsage: number }[] = []
+    // First, deduplicate by skill_name + metadata into unique records
+    const uniqueMainSkills = new Map<string, any>()
+    const allSupporting = new Map<string, any[]>()
     for (const s of deptSkills) {
-      let key = s.id
       if (s.import_source === 'import_zip' && s.metadata_json) {
-        try { const m = JSON.parse(s.metadata_json); if (m.original_filename) key = m.original_filename } catch {}
+        try {
+          const m = JSON.parse(s.metadata_json)
+          if (m.skill_format === 'yaml_frontmatter') {
+            uniqueMainSkills.set(s.skill_name, s)
+          } else if (m.skill_format === 'generic_md') {
+            if (!allSupporting.has(m.original_filename)) allSupporting.set(m.original_filename, [])
+            allSupporting.get(m.original_filename)!.push(s)
+          }
+        } catch {}
+      } else if (s.import_source === 'manual') {
+        // Manual skills: deduplicate by skill_name
+        if (!uniqueMainSkills.has(s.skill_name)) {
+          uniqueMainSkills.set(s.skill_name, s)
+        }
       }
-      if (!groups.has(key)) groups.set(key, { name: '', main: null as any, subs: [] as any[], totalUsage: 0 })
-      const g = groups.get(key)!
-      g.totalUsage += (skillUsageCounts[s.id] || 0)
-      const isMain = (() => { try { return JSON.parse(s.metadata_json || '{}').skill_format === 'yaml_frontmatter' } catch { return false } })()
-      if (isMain || !g.main) g.main = s
-      else g.subs.push(s)
     }
-    for (const [key, g] of groups) {
-      g.name = g.subs.length > 0 ? key.replace('.zip', '') : g.main.skill_name
-      ungrouped.push(g)
+    const groups: { name: string; main: any; subs: any[]; totalUsage: number }[] = []
+    for (const [name, skill] of uniqueMainSkills) {
+      const subs: any[] = []
+      // Find supporting docs by matching ZIP filename
+      for (const [zipName, subSkills] of allSupporting) {
+        if (subSkills.some(sub => sub.id === skill.id || sub.skill_name === skill.skill_name)) {
+          subs.push(...subSkills)
+        }
+      }
+      // Better: match by metadata original_filename
+      const skillMeta = (() => { try { return JSON.parse(skill.metadata_json || '{}') } catch { return {} } })()
+      const zipName = skillMeta.original_filename
+      if (zipName && allSupporting.has(zipName)) {
+        subs.push(...(allSupporting.get(zipName) || []))
+      }
+      const usage = (skillUsageCounts[skill.id] || 0) + subs.reduce((s, sub) => s + (skillUsageCounts[sub.id] || 0), 0)
+      groups.push({ name: skill.skill_name, main: skill, subs, totalUsage: usage })
     }
-    return ungrouped.sort((a, b) => b.totalUsage - a.totalUsage)
+    return groups.sort((a, b) => b.totalUsage - a.totalUsage)
   })()
 
   if (loading) {
@@ -1246,55 +1366,37 @@ export default function ProjectView() {
           </div>
         </div>
 
-        {/* Editor Status Bar — 项目编辑者状态 */}
-        <div className="shrink-0 px-6 py-1 border-b border-gray-800 bg-gray-900/50 flex items-center gap-3 text-[11px]">
-          <div className="flex items-center gap-1.5">
-            {lockState.locked && lockState.is_me ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-green-400 font-medium">编辑中</span>
-                <span className="text-gray-500">·</span>
-                <span className="text-gray-300">{lockState.editor_display_name}</span>
-              </>
-            ) : lockState.locked && !lockState.is_me ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-amber-500" />
-                <span className="text-amber-400 font-medium">只读模式</span>
-                <span className="text-gray-500">·</span>
-                <span className="text-gray-300">正在由 <span className="text-amber-300">{lockState.editor_display_name}</span> 编辑</span>
-                {!lockState.is_admin && (
-                  <button
-                    onClick={() => setShowTransferModal(true)}
-                    className="ml-2 px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors"
-                  >申请编辑权</button>
-                )}
-                {lockState.is_admin && (
-                  <button
-                    onClick={async () => {
-                      await api.forceTakeover(projectId!)
-                      const ls = await api.getLockStatus(projectId!)
-                      setLockState(ls)
-                    }}
-                    className="ml-2 px-2 py-0.5 rounded text-[10px] bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
-                  >管理员接管</button>
-                )}
-              </>
+        {/* Editor Lock Bar — 他人正在编辑时显示 */}
+        {lockState.locked && !lockState.is_me && (
+          <div className="shrink-0 px-6 py-1 border-b border-gray-800 bg-amber-500/5 flex items-center gap-3 text-[11px]">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            <span className="text-amber-400">
+              <span className="text-amber-300 font-medium">{lockState.editor_display_name}</span> 正在编辑此工作流
+            </span>
+            <div className="flex-1" />
+            {lockState.can_takeover ? (
+              <button onClick={async () => {
+                if (!confirm(`确定接管此工作流？${lockState.editor_display_name} 将收到通知。`)) return
+                await api.forceTakeover(projectId!)
+                const ls = await api.getLockStatus(projectId!)
+                setLockState(ls)
+              }}
+                className="px-2 py-0.5 rounded text-[10px] bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">
+                强制接管
+              </button>
             ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-gray-500" />
-                <span className="text-gray-400">空闲</span>
-                <span className="text-gray-500">· 暂无编辑者</span>
-              </>
+              <button onClick={() => setShowTransferModal(true)}
+                className="px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors">申请编辑权</button>
             )}
           </div>
-          {transferStatus && (
-            <span className="ml-auto text-[10px] text-indigo-400">{transferStatus}</span>
-          )}
-        </div>
+        )}
+        {transferStatus && (
+          <div className="shrink-0 px-6 py-1 border-b border-gray-800 bg-indigo-500/5 text-[10px] text-indigo-400">{transferStatus}</div>
+        )}
 
-        {/* Hermes Status Bar */}
+        {/* Hermes Status Bar — 合并模型 + 编辑状态 */}
         <div className="shrink-0 px-6 py-1.5 border-b border-gray-800 bg-gray-950/80 flex items-center gap-4 text-[11px]">
-          <ModelSwitcher hermesModel={hermesStatus.model} hermesProvider={hermesStatus.provider} streaming={streaming} />
+          <ModelSwitcher hermesModel={hermesStatus.model} hermesProvider={hermesStatus.provider} streaming={streaming} projectId={projectId} />
           <div className="flex items-center gap-1.5 text-gray-400">
             <BarChart3 className="w-3 h-3" />
             <span>{(hermesStatus.tokensUsed || 0).toLocaleString()} tokens</span>
@@ -1303,24 +1405,28 @@ export default function ProjectView() {
             <Activity className={`w-3 h-3 ${streaming ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
             <span className={streaming ? 'text-green-400 font-medium' : 'text-gray-300'}>{hermesStatus.status}</span>
           </div>
-          {/* 连接健康状态指示器 */}
           {streaming && connectionHealth === 'stale' && (
             <span className="flex items-center gap-1 text-[10px] text-amber-400 animate-pulse">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-              响应较慢...
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />响应较慢...
             </span>
           )}
           {connectionHealth === 'error' && connectionError && (
-            <button
-              onClick={() => { setConnectionHealth('idle'); setConnectionError(null) }}
+            <button onClick={() => { setConnectionHealth('idle'); setConnectionError(null) }}
               className="flex items-center gap-1 text-[10px] text-red-400 hover:text-red-300 transition-colors"
-              title="点击清除错误"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-              连接异常
+              title="点击清除错误">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />连接异常
             </button>
           )}
-          <div className="ml-auto"><ModelSwitcher /></div>
+          {/* 编辑器状态 — 右上角 */}
+          <div className="ml-auto flex items-center gap-1.5 text-gray-500">
+            {lockState.locked && lockState.is_me ? (
+              <span className="text-green-400">编辑中 · {lockState.editor_display_name}</span>
+            ) : lockState.locked && !lockState.is_me ? (
+              <span className="text-amber-400">只读 · {lockState.editor_display_name}</span>
+            ) : (
+              <span>空闲 · 暂无编辑者</span>
+            )}
+          </div>
         </div>
 
         {/* Messages */}
@@ -1352,16 +1458,8 @@ export default function ProjectView() {
               </button>
             </div>
           )}
-          {/* Model switch notification */}
-          {modelSwitchMsg && (
-            <div className="flex items-center justify-center py-2">
-              <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
-                <Cpu className="w-3 h-3 text-indigo-400" />
-                <span className="text-[11px] text-indigo-400">—————— {modelSwitchMsg} ——————</span>
-              </div>
-            </div>
-          )}
-
+          
+          {/* Messages */}
           {messages.length === 0 && !streaming && (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
               <Bot className="w-12 h-12 mb-4 text-gray-500" />
@@ -1536,6 +1634,9 @@ export default function ProjectView() {
                           tr({ children }) {
                             return <tr className="even:bg-gray-800/30">{children}</tr>
                           },
+                          img({ src, alt }) {
+                            return <img src={src || ''} alt={alt || ''} className="max-w-full rounded-lg my-2 cursor-pointer hover:opacity-90 transition-opacity" style={{ maxHeight: 400 }} loading="lazy" onClick={(e) => { e.stopPropagation(); setPreviewImage({ src: src || '', name: alt || '图片' }) }} />
+                          },
                         }}>
                         {msg.content}
                       </ReactMarkdown>
@@ -1684,6 +1785,9 @@ export default function ProjectView() {
                         tr({ children }) {
                           return <tr className="even:bg-gray-800/30">{children}</tr>
                         },
+                        img({ src, alt }) {
+                          return <img src={src || ''} alt={alt || ''} className="max-w-full rounded-lg my-2 cursor-pointer hover:opacity-90 transition-opacity" style={{ maxHeight: 400 }} loading="lazy" onClick={(e) => { e.stopPropagation(); setPreviewImage({ src: src || '', name: alt || '图片' }) }} />
+                        },
                       }}>
                       {streamContent || ''}
                     </ReactMarkdown>
@@ -1706,6 +1810,14 @@ export default function ProjectView() {
             </div>
           )}
 
+          {/* Model switch notification — inside messages area at bottom */}
+          {modelSwitchMsg && (
+            <div className="flex items-center justify-center py-1">
+              <span className="text-[11px] text-indigo-400 bg-indigo-500/5 px-3 py-0.5 rounded-full">
+                {modelSwitchMsg}
+              </span>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -2156,15 +2268,51 @@ export default function ProjectView() {
           <div className="shrink-0 mb-3">
           <h3 className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex items-center gap-2">
             <BookOpen className="w-3.5 h-3.5 text-blue-400" />
-            部门技能
-            <span className="ml-auto text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full">{deptSkills.length}</span>
+            {deptCategoryFilter ? (
+              <>
+                <button onClick={() => setDeptCategoryFilter('')}
+                  className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5">
+                  <ChevronLeft className="w-3 h-3" />返回
+                </button>
+                <span className="text-[11px] text-blue-300">{deptCategoryFilter}</span>
+              </>
+            ) : (
+              '部门技能'
+            )}
+            <span className="ml-auto text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full">{deptSkillGroups.length}</span>
           </h3>
           </div>
-          {deptSkills.length === 0 ? (
+          {deptSkillGroups.length === 0 ? (
             <div className="flex-1"><p className="text-xs text-gray-500">暂无部门技能</p></div>
+          ) : !deptCategoryFilter ? (
+            /* 分类气泡列表 */
+            <div className="flex-1 pr-1" style={{ overflowY: 'auto', overflowX: 'visible' }}>
+              <div className="flex flex-wrap gap-1.5 py-1">
+                {(() => {
+                  const cats = [...new Set(deptSkillGroups.map(g => g.main?.category || '未分类'))]
+                  const filtered = cats.filter(c => c !== '未分类' || deptSkillGroups.some(g => !g.main?.category))
+                  return filtered.slice(0, 16).map((cat, i) => {
+                    const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6']
+                    const borderColor = colors[i % colors.length]
+                    return (
+                      <button key={cat} onClick={() => setDeptCategoryFilter(cat)}
+                        className="px-2.5 py-1 rounded-full text-xs border transition-all hover:brightness-110"
+                        style={{ borderColor, color: borderColor, background: `${borderColor}10` }}>
+                        {cat}
+                      </button>
+                    )
+                  })
+                })()}
+              </div>
+            </div>
           ) : (
+            /* 选中分类后的技能列表 */
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-0.5">
-              {deptSkillGroups.slice(0, 15).map((group) => {
+              {deptSkillGroups.slice(0, 15).filter(group => {
+                // Check if ANY skill in the group matches the selected category
+                const allSkills = [group.main, ...group.subs]
+                return allSkills.some(s => (s?.category || '未分类') === deptCategoryFilter)
+              }).map((group) => {
                 const skill = group.main
                 const hasSubs = group.subs.length > 0
                 const isGroupExpanded = expandedDeptGroups.has(group.name)

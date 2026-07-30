@@ -25,9 +25,10 @@ HERMES_AUTH = Path.home() / ".hermes" / "auth.json"
 PROVIDER_MODELS: dict[str, list[dict]] = {
     "deepseek": [
         {"name": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "thinking": True},
-        {"name": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "thinking": False},
-        {"name": "deepseek-reasoner", "label": "DeepSeek Reasoner", "thinking": True},
-        {"name": "deepseek-chat", "label": "DeepSeek Chat", "thinking": True},
+        {"name": "deepseek-v4-pro", "label": "DeepSeek V4 Pro (快速)", "thinking": False},
+        {"name": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "thinking": True},
+        {"name": "deepseek-v4-flash", "label": "DeepSeek V4 Flash (快速)", "thinking": False},
+        {"name": "deepseek-reasoner", "label": "DeepSeek R1 (Legacy)", "thinking": True},
     ],
     "dashscope": [
         {"name": "qwen-max", "label": "Qwen Max", "thinking": True},
@@ -53,6 +54,13 @@ PROVIDER_MODELS: dict[str, list[dict]] = {
     ],
 }
 
+# Hermes auth.json provider key → our preset key
+_PROVIDER_ALIASES = {
+    "chatgpt": "openai",
+    "claude": "anthropic",
+    "gemini": "google",
+}
+
 
 def _read_hermes_config() -> dict:
     if not HERMES_CONFIG.exists():
@@ -72,16 +80,11 @@ def _read_hermes_auth() -> dict:
 async def get_current_model(current_user: Annotated[User, Depends(get_current_user)]):
     config = _read_hermes_config()
     model = config.get("model", {})
-    return {
-        "model": model.get("default", ""),
-        "provider": model.get("provider", ""),
-        "base_url": model.get("base_url", ""),
-    }
+    return {"model": model.get("default", ""), "provider": model.get("provider", ""), "base_url": model.get("base_url", "")}
 
 
 @router.get("/providers")
 async def list_providers(current_user: Annotated[User, Depends(get_current_user)]):
-    """列出 Hermes 已配置的提供商（不返回 API Key）"""
     auth = _read_hermes_auth()
     providers = []
     pool = auth.get("credential_pool", {})
@@ -91,13 +94,9 @@ async def list_providers(current_user: Annotated[User, Depends(get_current_user)
     return {"providers": providers, "active_provider": auth.get("active_provider")}
 
 
-@router.get("/all")
-async def list_available_models(current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
-    """
-    自动检测 + 同步：从 Hermes auth 读取可用提供商，
-    为每个提供商生成可选模型列表，写入数据库。
-    返回所有可用于切换的模型。
-    """
+# ── Shared model list builder ──
+
+async def _build_model_list(db: AsyncSession) -> dict:
     config = _read_hermes_config()
     curent = config.get("model", {})
     curent_default = curent.get("default", "")
@@ -107,102 +106,162 @@ async def list_available_models(current_user: Annotated[User, Depends(get_curren
     pool = auth.get("credential_pool", {})
     available_providers = [p for p in pool.keys() if isinstance(pool[p], list) and len(pool[p]) > 0]
 
+    # ── Read all models from database ──
+    result = await db.execute(text(
+        "SELECT id, provider, model_name, display_name, thinking_mode FROM model_configs ORDER BY provider, created_at ASC"
+    ))
+    db_models = result.fetchall()
+
     models_out = []
+    for row in db_models:
+        cid, cprov, cmodel, cdisp, cthink = row
+        models_out.append({
+            "id": f"db:{cid}",
+            "name": cmodel, "provider": cprov,
+            "label": cdisp or cmodel,
+            "thinking": bool(cthink),
+            "thinking_effort": "high" if cthink else None,
+            "active": False, "can_delete": True,
+        })
 
-    for provider in available_providers:
-        presets = PROVIDER_MODELS.get(provider, [])
-        if not presets:
-            continue
-        for preset in presets:
-            if preset["thinking"]:
-                # Generate two entries: with and without thinking
-                models_out.append({
-                    "id": f"{provider}:{preset['name']}:think",
-                    "name": preset["name"],
-                    "provider": provider,
-                    "label": f"{preset['label']} (思考)",
-                    "thinking": True,
-                    "thinking_effort": "high",
-                    "active": False,
-                })
-                models_out.append({
-                    "id": f"{provider}:{preset['name']}:fast",
-                    "name": preset["name"],
-                    "provider": provider,
-                    "label": f"{preset['label']}",
-                    "thinking": False,
-                    "thinking_effort": None,
-                    "active": False,
-                })
-            else:
-                models_out.append({
-                    "id": f"{provider}:{preset['name']}",
-                    "name": preset["name"],
-                    "provider": provider,
-                    "label": preset["label"],
-                    "thinking": False,
-                    "thinking_effort": None,
-                    "active": False,
-                })
-
-    # Deduplicate by id
-    seen = set()
-    deduped = []
-    for m in models_out:
-        if m["id"] not in seen:
-            seen.add(m["id"])
-            deduped.append(m)
+    if not models_out:
+        # Empty DB → generate from presets + save
+        for provider in available_providers:
+            mapped = _PROVIDER_ALIASES.get(provider, provider)
+            for preset in PROVIDER_MODELS.get(mapped, []):
+                if preset["thinking"]:
+                    sid = f"{provider}_{preset['name']}_think"
+                    await db.execute(text(
+                        "INSERT OR IGNORE INTO model_configs (id,provider,model_name,display_name,thinking_mode,thinking_effort,is_active,created_at) VALUES (:id,:p,:m,:d,1,'high',0,datetime('now'))"
+                    ), {"id": sid, "p": provider, "m": preset["name"], "d": f"{preset['label']} (思考)"})
+                sid = f"{provider}_{preset['name']}"
+                await db.execute(text(
+                    "INSERT OR IGNORE INTO model_configs (id,provider,model_name,display_name,thinking_mode,thinking_effort,is_active,created_at) VALUES (:id,:p,:m,:d,0,'',0,datetime('now'))"
+                ), {"id": sid, "p": provider, "m": preset["name"], "d": preset['label']})
+        await db.commit()
+        # Re-read
+        result = await db.execute(text(
+            "SELECT id, provider, model_name, display_name, thinking_mode FROM model_configs ORDER BY provider, created_at ASC"
+        ))
+        db_models = result.fetchall()
+        models_out = []
+        for row in db_models:
+            cid, cprov, cmodel, cdisp, cthink = row
+            models_out.append({
+                "id": f"db:{cid}",
+                "name": cmodel, "provider": cprov,
+                "label": cdisp or cmodel,
+                "thinking": bool(cthink),
+                "thinking_effort": "high" if cthink else None,
+                "active": False, "can_delete": True,
+            })
 
     # Mark current model as active
-    for m in deduped:
+    for m in models_out:
         if m["name"] == curent_default and m["provider"] == curent_provider:
             m["active"] = True
             break
 
-    return {"models": deduped, "current": {"model": curent_default, "provider": curent_provider}, "available_providers": available_providers}
+    return {"models": models_out, "current": {"model": curent_default, "provider": curent_provider}, "available_providers": available_providers}
+
+
+@router.get("/all")
+async def list_available_models(current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _build_model_list(db)
+
+
+@router.get("/refresh")
+async def refresh_models(current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _build_model_list(db)
 
 
 @router.put("/switch")
 async def switch_model(data: dict, current_user: Annotated[User, Depends(get_current_user)]):
-    """切换模型并更新 Hermes config.yaml"""
     model_name = data.get("model")
     provider = data.get("provider")
     thinking = data.get("thinking", False)
-    thinking_effort = data.get("thinking_effort", "high") if thinking else None
-
     if not model_name or not provider:
         raise HTTPException(status_code=400, detail="缺少模型名称或提供商")
 
     config = _read_hermes_config()
     if "model" not in config:
         config["model"] = {}
-
     config["model"]["default"] = model_name
-    config["model"]["provider"] = provider
+    # Map provider back to Hermes auth key (openai → chatgpt, etc.)
+    _REVERSE_ALIASES = {"openai": "chatgpt", "anthropic": "claude"}
+    hermes_provider = _REVERSE_ALIASES.get(provider, provider)
+    config["model"]["provider"] = hermes_provider
 
-    # Set base_url from known providers
     provider_base_urls = {
         "deepseek": "https://api.deepseek.com/v1",
         "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "openai": "https://api.openai.com/v1",
+        "chatgpt": "https://api.openai.com/v1",
         "anthropic": "https://api.anthropic.com",
     }
     if provider in provider_base_urls:
         config["model"]["base_url"] = provider_base_urls[provider]
 
-    # Set agent reasoning_effort if thinking is enabled
     if "agent" not in config:
         config["agent"] = {}
-    if thinking and thinking_effort == "high":
+    if thinking:
         config["agent"]["reasoning_effort"] = "high"
 
-    # Back up
     if HERMES_CONFIG.exists():
         import shutil
-        bak = HERMES_CONFIG.with_suffix(f".yaml.bak.switch")
-        shutil.copy(HERMES_CONFIG, bak)
+        shutil.copy(HERMES_CONFIG, HERMES_CONFIG.with_suffix(".yaml.bak.switch"))
 
     with open(HERMES_CONFIG, "w") as f:
         yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
     return {"ok": True, "model": model_name, "provider": provider, "thinking": thinking}
+
+
+@router.post("/custom")
+async def add_custom_model(data: dict, current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    model_name = data.get("model", "").strip()
+    provider = data.get("provider", "").strip()
+    display_name = data.get("display_name", "").strip() or model_name
+    thinking = data.get("thinking", False)
+    if not model_name or not provider:
+        raise HTTPException(status_code=400, detail="模型名称和提供商不能为空")
+    import uuid
+    model_id = str(uuid.uuid4())[:8]
+    await db.execute(text(
+        "INSERT INTO model_configs (id, provider, model_name, display_name, thinking_mode, thinking_effort, is_active, created_at) "
+        "VALUES (:id, :provider, :model_name, :display_name, :thinking, :effort, 0, datetime('now'))"
+    ), {"id": model_id, "provider": provider, "model_name": model_name, "display_name": display_name, "thinking": 1 if thinking else 0, "effort": "high" if thinking else ""})
+    await db.commit()
+    return {"ok": True, "id": model_id}
+
+
+@router.delete("/custom/{model_id}")
+async def delete_custom_model(model_id: str, current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    await db.execute(text("DELETE FROM model_configs WHERE id=:id"), {"id": model_id})
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/custom")
+async def list_custom_models(current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(text("SELECT id, provider, model_name, display_name, thinking_mode FROM model_configs ORDER BY created_at DESC"))
+    return [{"id": r[0], "provider": r[1], "model_name": r[2], "display_name": r[3], "thinking": bool(r[4])} for r in result.fetchall()]
+
+
+@router.get("/project/{project_id}")
+async def get_project_model(project_id: str, current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(text("SELECT model_config_json FROM projects WHERE id=:id"), {"id": project_id})
+    row = result.fetchone()
+    if row and row[0]:
+        return json.loads(row[0])
+    config = _read_hermes_config()
+    model = config.get("model", {})
+    return {"model": model.get("default", ""), "provider": model.get("provider", ""), "thinking": False, "is_global": True}
+
+
+@router.put("/project/{project_id}")
+async def set_project_model(project_id: str, data: dict, current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    config_json = json.dumps({"model": data.get("model", ""), "provider": data.get("provider", ""), "thinking": data.get("thinking", False), "thinking_effort": "high" if data.get("thinking") else None})
+    await db.execute(text("UPDATE projects SET model_config_json=:cfg WHERE id=:id"), {"cfg": config_json, "id": project_id})
+    await db.commit()
+    return {"ok": True}

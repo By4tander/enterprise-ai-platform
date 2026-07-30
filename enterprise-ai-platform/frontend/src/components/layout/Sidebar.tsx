@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useAppStore } from '../../store'
 import { api } from '../../services/api'
 import { hasPermission } from '../../utils/permissions'
-import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, ChevronDown, Loader2, AlertCircle, Pencil, Check, X, Zap, Folder, Palette, Trash2 } from 'lucide-react'
+import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, ChevronDown, Loader2, AlertCircle, Pencil, Check, X, Zap, Folder, Palette, Trash2, Settings } from 'lucide-react'
 
 interface Project {
   id: string
@@ -20,6 +20,7 @@ interface ProjectFolder {
   name: string
   color: string
   department_id: string
+  department_ids: string[]
   position: number
   project_count: number
 }
@@ -50,10 +51,15 @@ export default function Sidebar() {
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [newFolderColor, setNewFolderColor] = useState(PRESET_COLORS[0])
+  const [newFolderDepts, setNewFolderDepts] = useState<string[]>([])
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [renameFolderId, setRenameFolderId] = useState<string | null>(null)
   const [renameFolderValue, setRenameFolderValue] = useState('')
+  const [editFolder, setEditFolder] = useState<any>(null)
+  const [editFolderName, setEditFolderName] = useState('')
+  const [editFolderColor, setEditFolderColor] = useState('')
+  const [editFolderDepts, setEditFolderDepts] = useState<string[]>([])
 
   const loadProjects = async () => {
     setLoading(true)
@@ -95,6 +101,15 @@ export default function Sidebar() {
     return () => window.removeEventListener('project-archived', handler)
   }, [loadProjects])
 
+  // ── 项目编辑锁跟踪 ──
+  const [projectLocks, setProjectLocks] = useState<Record<string, { editor_display_name: string; editor_id: string }>>({})
+  useEffect(() => {
+    const fetchLocks = () => api.getAllLocks().then(setProjectLocks).catch(() => {})
+    fetchLocks()
+    const interval = setInterval(fetchLocks, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) return
     setCreating(true)
@@ -125,11 +140,8 @@ export default function Sidebar() {
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return
     try {
-      const deptId = selectedDept || user?.department_id || departments[0]?.id || ''
-      if (!deptId) return
-      await api.createFolder({ name: newFolderName.trim(), color: newFolderColor, department_id: deptId })
-      setShowNewFolder(false)
-      setNewFolderName('')
+      await api.createFolder({ name: newFolderName.trim(), color: newFolderColor, department_ids: newFolderDepts })
+      setShowNewFolder(false); setNewFolderName(''); setNewFolderDepts([])
       loadProjects()
     } catch (e: any) {
       alert(e.message || '创建文件夹失败')
@@ -218,6 +230,13 @@ export default function Sidebar() {
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.status === 'active' ? 'bg-green-500' : 'bg-gray-400'}`} />
           )}
           <span className="truncate flex-1 text-left">{p.name}</span>
+          {/* 编辑者昵称 */}
+          {projectLocks[p.id] && projectLocks[p.id].editor_display_name && (
+            <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded-full truncate max-w-[80px] shrink-0"
+              title={`正在编辑: ${projectLocks[p.id].editor_display_name}`}>
+              {projectLocks[p.id].editor_display_name}
+            </span>
+          )}
           {canRename && (
             <button
               onClick={(e) => { e.stopPropagation(); setRenameId(p.id); setRenameValue(p.name); setTimeout(() => renameInputRef.current?.focus(), 50) }}
@@ -361,9 +380,9 @@ export default function Sidebar() {
                     {/* Folder actions — 仅管理员可见 */}
                     {hasPermission(user?.role, 'folder.rename') && (
                       <div className="opacity-0 group-hover/folder:opacity-100 flex gap-0.5 shrink-0 transition-opacity">
-                        <button onClick={(e) => { e.stopPropagation(); setRenameFolderId(folder.id); setRenameFolderValue(folder.name) }}
-                          className="p-0.5 rounded hover:bg-gray-700 text-gray-500" title="重命名">
-                          <Pencil className="w-2.5 h-2.5" />
+                        <button onClick={(e) => { e.stopPropagation(); setEditFolder(folder); setEditFolderName(folder.name); setEditFolderColor(folder.color); setEditFolderDepts(folder.department_ids || []) }}
+                          className="p-0.5 rounded hover:bg-gray-700 text-gray-500" title="设置">
+                          <Settings className="w-2.5 h-2.5" />
                         </button>
                         <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id) }}
                           className="p-0.5 rounded hover:bg-gray-700 text-gray-500 hover:text-red-400" title="删除文件夹">
@@ -403,6 +422,68 @@ export default function Sidebar() {
         )}
       </nav>
 
+      {/* Edit Folder Modal */}
+      {editFolder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setEditFolder(null)} />
+          <div className="relative bg-gray-800 border border-gray-700 rounded-xl p-5 w-full max-w-sm shadow-2xl animate-fade-in">
+            <h3 className="text-sm font-semibold text-white mb-3">编辑文件夹</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">文件夹名称</label>
+                <input value={editFolderName} onChange={(e) => setEditFolderName(e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50" autoFocus />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">标签颜色</label>
+                <div className="flex gap-2 flex-wrap">
+                  {PRESET_COLORS.map(c => (
+                    <button key={c} onClick={() => setEditFolderColor(c)}
+                      className={`w-6 h-6 rounded-full border-2 transition-all ${editFolderColor === c ? 'border-white scale-110' : 'border-transparent'}`}
+                      style={{ backgroundColor: c }} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block">可见部门</label>
+                <p className="text-[10px] text-gray-500 mb-2">不选则所有部门可见</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {departments.map(d => {
+                    const selected = editFolderDepts.includes(d.id)
+                    return (
+                      <button key={d.id} onClick={() => {
+                        setEditFolderDepts(prev => selected ? prev.filter(x => x !== d.id) : [...prev, d.id])
+                      }}
+                        className={`px-2.5 py-1 rounded-full text-[11px] transition-all ${
+                          selected
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:border-gray-500'
+                        }`}>
+                        {d.name}{selected && <span className="ml-1 text-indigo-400">✓</span>}
+                      </button>
+                    )
+                  })}
+                  {editFolderDepts.length > 0 && (
+                    <button onClick={() => setEditFolderDepts([])}
+                      className="px-2 py-1 rounded-full text-[10px] text-gray-500 hover:text-gray-300 border border-gray-600 hover:border-gray-500">清除</button>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setEditFolder(null)} className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">取消</button>
+              <button onClick={async () => {
+                if (!editFolderName.trim()) return
+                await api.updateFolder(editFolder.id, { name: editFolderName.trim(), color: editFolderColor, department_ids: editFolderDepts })
+                setEditFolder(null)
+                loadProjects()
+              }}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium">保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* New Folder Modal */}
       {showNewFolder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -425,6 +506,34 @@ export default function Sidebar() {
                       className={`w-6 h-6 rounded-full border-2 transition-all ${newFolderColor === c ? 'border-white scale-110' : 'border-transparent'}`}
                       style={{ backgroundColor: c }} />
                   ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block">可见部门</label>
+                <p className="text-[10px] text-gray-500 mb-2">不选则所有部门可见</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {departments.map(d => {
+                    const selected = newFolderDepts.includes(d.id)
+                    return (
+                      <button key={d.id} onClick={() => {
+                        setNewFolderDepts(prev => selected ? prev.filter(x => x !== d.id) : [...prev, d.id])
+                      }}
+                        className={`px-2.5 py-1 rounded-full text-[11px] transition-all ${
+                          selected
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:border-gray-500'
+                        }`}>
+                        {d.name}
+                        {selected && <span className="ml-1 text-indigo-400">✓</span>}
+                      </button>
+                    )
+                  })}
+                  {newFolderDepts.length > 0 && (
+                    <button onClick={() => setNewFolderDepts([])}
+                      className="px-2 py-1 rounded-full text-[10px] text-gray-500 hover:text-gray-300 border border-gray-600 hover:border-gray-500">
+                      清除
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

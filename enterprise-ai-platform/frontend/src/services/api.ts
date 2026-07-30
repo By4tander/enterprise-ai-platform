@@ -108,8 +108,15 @@ export const api = {
   getCurrentModel: () => request('/models/current'),
   getModelProviders: () => request('/models/providers'),
   getAvailableModels: () => request('/models/all'),
-  switchModel: (data: { model: string; provider?: string; base_url?: string }) =>
+  switchModel: (data: { model: string; provider?: string; base_url?: string; thinking?: boolean; thinking_effort?: string }) =>
     request('/models/switch', { method: 'PUT', body: JSON.stringify(data) }),
+  getProjectModel: (projectId: string) => request(`/models/project/${projectId}`),
+  setProjectModel: (projectId: string, data: any) =>
+    request(`/models/project/${projectId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  addCustomModel: (data: any) =>
+    request('/models/custom', { method: 'POST', body: JSON.stringify(data) }),
+  deleteCustomModel: (modelId: string) =>
+    request(`/models/custom/${modelId}`, { method: 'DELETE' }),
 
   // ── Departments ──
   getDepartments: () => request('/departments/'),
@@ -213,13 +220,15 @@ export const api = {
   getMyRequests: () => request('/locks/my-requests'),
   respondTransfer: (requestId: string, approved: boolean) => request('/locks/respond-transfer', { method: 'POST', body: JSON.stringify({ request_id: requestId, approved }) }),
   forceTakeover: (projectId: string) => request('/locks/force-takeover', { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
+  getAllLocks: () => request('/locks/all-locks'),
+  getNotifications: () => request('/locks/notifications'),
 
   // ── Folders (项目文件夹) ──
   getFolders: (departmentId?: string) =>
     request(`/folders/${departmentId ? `?department_id=${departmentId}` : ''}`),
   createFolder: (data: { name: string; color: string; department_id: string }) =>
     request('/folders/', { method: 'POST', body: JSON.stringify(data) }),
-  updateFolder: (folderId: string, data: { name?: string; color?: string }) =>
+  updateFolder: (folderId: string, data: { name?: string; color?: string; department_ids?: string[] }) =>
     request(`/folders/${folderId}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteFolder: (folderId: string) =>
     request(`/folders/${folderId}`, { method: 'DELETE' }),
@@ -414,4 +423,63 @@ export function chatStream(
     });
 
   return controller;
+}
+
+// ── 后台对话状态与恢复 ──
+export function getChatStatus(projectId: string): Promise<{ status: string; chunk_count?: number; message_id?: string }> {
+  return request(`/chat/status/${projectId}`);
+}
+
+export function resumeChat(projectId: string, callbacks: {
+  onContent?: (chunk: string) => void;
+  onThinking?: (chunk: string) => void;
+  onContext?: (data: any) => void;
+  onDone?: (data: any) => void;
+  onError?: (msg: string) => void;
+  onStatus?: (msg: string) => void;
+}) {
+  const token = localStorage.getItem('access_token');
+  const baseUrl = getApiBase();
+  const url = `${baseUrl}/chat/resume/${projectId}`;
+
+  return fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+  }).then(async response => {
+    if (response.status === 404) { callbacks.onDone?.({ _no_task: true }); return }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const lineEnd = buffer.indexOf('\n');
+        if (lineEnd === -1) break;
+        const line = buffer.slice(0, lineEnd).trim();
+        buffer = buffer.slice(lineEnd + 1);
+
+        if (line.startsWith('event: ')) { currentEvent = line.slice(7); }
+        else if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6));
+          switch (data.type) {
+            case 'content_chunk': callbacks.onContent?.(data.content || ''); break;
+            case 'thinking_chunk': callbacks.onThinking?.(data.content || ''); break;
+            case 'context': callbacks.onContext?.(data); break;
+            case 'done':
+              callbacks.onDone?.(data);
+              return;
+            case 'error': callbacks.onError?.(data.content || ''); return;
+            case 'status': callbacks.onStatus?.(data.content || ''); break;
+          }
+        }
+      }
+    }
+  }).catch((err: any) => callbacks.onError?.(err.message || '恢复失败'));
 }

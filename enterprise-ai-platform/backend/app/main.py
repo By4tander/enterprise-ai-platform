@@ -57,6 +57,26 @@ async def _migrate_db():
         except Exception as e:
             logger.warning(f"projects.folder_id 迁移失败: {e}")
 
+        # projects.model_config_json
+        try:
+            result = await conn.execute(text("PRAGMA table_info(projects)"))
+            columns = [row[1] for row in result.fetchall()]
+            if 'model_config_json' not in columns:
+                await conn.execute(text("ALTER TABLE projects ADD COLUMN model_config_json TEXT DEFAULT ''"))
+                logger.info("✅ 迁移：projects.model_config_json 已添加")
+        except Exception as e:
+            logger.warning(f"projects.model_config_json 迁移失败: {e}")
+
+        # project_folders.department_ids
+        try:
+            result = await conn.execute(text("PRAGMA table_info(project_folders)"))
+            columns = [row[1] for row in result.fetchall()]
+            if 'department_ids' not in columns:
+                await conn.execute(text("ALTER TABLE project_folders ADD COLUMN department_ids TEXT DEFAULT ''"))
+                logger.info("✅ 迁移：project_folders.department_ids 已添加")
+        except Exception as e:
+            logger.warning(f"project_folders.department_ids 迁移失败: {e}")
+
         logger.debug("数据库迁移检查完成")
 
 

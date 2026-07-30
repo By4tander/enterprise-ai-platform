@@ -25,12 +25,13 @@ router = APIRouter(prefix="/api/folders", tags=["项目文件夹"])
 class FolderCreate(BaseModel):
     name: str
     color: str = "#6366f1"
-    department_id: str
+    department_ids: list[str] = []  # empty = all departments
 
 
 class FolderUpdate(BaseModel):
     name: str | None = None
     color: str | None = None
+    department_ids: list[str] | None = None
 
 
 class MoveProject(BaseModel):
@@ -41,7 +42,7 @@ class FolderOut(BaseModel):
     id: str
     name: str
     color: str
-    department_id: str
+    department_ids: list[str] = []
     position: int
     project_count: int = 0
 
@@ -58,21 +59,26 @@ class ClusterMemoryRequest(BaseModel):
 async def list_folders(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-    department_id: str | None = None,
 ):
-    """列出文件夹"""
-    query = select(ProjectFolder)
-    if current_user.role == UserRole.SUPER_ADMIN:
-        if department_id:
-            query = query.where(ProjectFolder.department_id == department_id)
-    else:
-        dept = department_id or current_user.department_id
-        if dept:
-            query = query.where(ProjectFolder.department_id == dept)
-
-    query = query.order_by(ProjectFolder.position.asc())
+    """列出文件夹。超管看全部；其他人看所在部门可见的文件夹。"""
+    import json
+    query = select(ProjectFolder).order_by(ProjectFolder.position.asc())
     result = await db.execute(query)
     folders = result.scalars().all()
+
+    # 权限过滤：超管看全部，其他人只看自己部门可见的
+    if current_user.role != UserRole.SUPER_ADMIN:
+        user_dept = current_user.department_id
+        filtered = []
+        for f in folders:
+            if not f.department_ids:
+                # Empty = visible to all departments
+                filtered.append(f)
+            else:
+                dept_list = json.loads(f.department_ids) if f.department_ids else []
+                if user_dept in dept_list:
+                    filtered.append(f)
+        folders = filtered
 
     out = []
     for f in folders:
@@ -80,9 +86,11 @@ async def list_folders(
             select(Project).where(Project.folder_id == f.id, Project.status == "active")
         )
         count = len(count_result.scalars().all())
+        import json
+        dept_ids = json.loads(f.department_ids) if f.department_ids else []
         out.append(FolderOut(
             id=f.id, name=f.name, color=f.color,
-            department_id=f.department_id, position=f.position,
+            department_ids=dept_ids, position=f.position,
             project_count=count,
         ))
     return out
@@ -95,41 +103,34 @@ async def create_folder(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """创建文件夹"""
-    # 权限
+    import json
     if current_user.role == UserRole.MEMBER:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="成员无权创建文件夹")
 
-    dept = await db.get(Department, req.department_id)
-    if dept is None:
-        raise HTTPException(status_code=400, detail="部门不存在")
-
     # 获取当前最大 position
-    result = await db.execute(
-        select(ProjectFolder)
-        .where(ProjectFolder.department_id == req.department_id)
-        .order_by(ProjectFolder.position.desc())
-        .limit(1)
-    )
+    result = await db.execute(select(ProjectFolder).order_by(ProjectFolder.position.desc()).limit(1))
     last = result.scalar_one_or_none()
     next_pos = (last.position + 1) if last else 0
 
+    dept_ids_json = json.dumps(req.department_ids) if req.department_ids else ""
+
     folder = ProjectFolder(
-        name=req.name,
-        color=req.color,
-        department_id=req.department_id,
+        name=req.name, color=req.color,
+        department_ids=dept_ids_json,
         position=next_pos,
     )
     db.add(folder)
     await db.commit()
+    db.add(folder)
+    await db.commit()
     await db.refresh(folder)
 
-    # 创建文件夹存储目录
     FolderService().ensure_folder_dir(folder.id)
 
     return FolderOut(
         id=folder.id, name=folder.name, color=folder.color,
-        department_id=folder.department_id, position=folder.position,
-        project_count=0,
+        department_ids=json.loads(folder.department_ids) if folder.department_ids else [],
+        position=folder.position, project_count=0,
     )
 
 
@@ -141,6 +142,7 @@ async def update_folder(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """更新文件夹（仅管理员）"""
+    import json
     if current_user.role == UserRole.MEMBER:
         raise HTTPException(status_code=403, detail="成员无权修改文件夹")
 
@@ -152,12 +154,16 @@ async def update_folder(
         folder.name = req.name
     if req.color is not None:
         folder.color = req.color
+    if req.department_ids is not None:
+        folder.department_ids = json.dumps(req.department_ids)
+
     await db.commit()
     await db.refresh(folder)
 
     return FolderOut(
         id=folder.id, name=folder.name, color=folder.color,
-        department_id=folder.department_id, position=folder.position,
+        department_ids=json.loads(folder.department_ids) if folder.department_ids else [],
+        position=folder.position,
     )
 
 

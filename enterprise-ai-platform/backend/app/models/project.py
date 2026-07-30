@@ -33,6 +33,9 @@ class Project(Base):
     folder_id: Mapped[str | None] = mapped_column(
         CHAR(36), ForeignKey("project_folders.id", ondelete="SET NULL"), nullable=True
     )
+    model_config_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default=""
+    )
     status: Mapped[ProjectStatus] = mapped_column(
         SAEnum(ProjectStatus), default=ProjectStatus.ACTIVE, nullable=False
     )

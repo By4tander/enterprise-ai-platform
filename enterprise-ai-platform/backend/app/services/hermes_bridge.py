@@ -136,10 +136,14 @@ class HermesCLIBridge:
         system_prompt: Optional[str] = None,
         project_id: Optional[str] = None,
         file_paths: Optional[list[str]] = None,
+        model_config: Optional[dict] = None,
     ) -> AsyncGenerator[Dict[str, str], None]:
         """
         异步流式调用 Hermes CLI，逐块返回结构化增量。
         集成并发控制 + 沙盒隔离。
+
+        Args:
+            model_config: 项目级模型覆盖 {"model": "qwen-max", "provider": "dashscope", "thinking": True}
 
         Args:
             prompt: 用户输入（或已拼装好的完整 Prompt）
@@ -209,6 +213,21 @@ class HermesCLIBridge:
             # 构建进程环境 — 三层修复解决流式输出阻塞
             process_env = os.environ.copy()
 
+            # 确保 Hermes 的 .env 变量可用（Firecrawl API Key 等）
+            dotenv_path = Path.home() / ".hermes" / ".env"
+            if dotenv_path.exists():
+                try:
+                    with open(dotenv_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith('#') and '=' in line:
+                                k, v = line.split('=', 1)
+                                k, v = k.strip(), v.strip()
+                                if k not in process_env:
+                                    process_env[k] = v
+                except Exception:
+                    pass
+
             # [Fix 1] 强制禁用 Python 缓冲 → 子进程 stdout 即时 flush
             process_env["PYTHONUNBUFFERED"] = "1"
             process_env["PYTHONIOENCODING"] = "utf-8"
@@ -226,6 +245,15 @@ class HermesCLIBridge:
             # 保留 NO_PROXY 以防万一，但确保包含本地地址
             process_env["NO_PROXY"] = "localhost,127.0.0.1,::1,*.local"
             process_env["no_proxy"] = process_env["NO_PROXY"]
+
+            # [Fix 3] 项目级模型覆盖 → 通过环境变量注入
+            # hermes_stream_bridge 读取 HERMES_INFERENCE_MODEL 和 HERMES_INFERENCE_PROVIDER
+            if model_config and model_config.get("model"):
+                process_env["HERMES_INFERENCE_MODEL"] = model_config.get("model", "")
+                process_env["HERMES_INFERENCE_PROVIDER"] = model_config.get("provider", "")
+                if model_config.get("thinking"):
+                    process_env["HERMES_REASONING_EFFORT"] = "high"
+                logger.info(f"[HermesBridge] 项目模型覆盖: {model_config.get('provider')}/{model_config.get('model')} thinking={model_config.get('thinking')}")
 
             process_env.update(isolation_env)
             process_env.update(process_env_extra)
