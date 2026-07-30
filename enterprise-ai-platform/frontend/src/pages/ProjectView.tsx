@@ -6,6 +6,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, chatStream } from '../services/api'
 import { useAuthStore, useVideoStore } from '../store'
+import { getModelConfigs, getActiveModelId, setActiveModelId, type ModelConfig } from '../components/settings/SettingsModal'
 import ImageViewer from '../components/media/ImageViewer'
 import VideoPlayer from '../components/media/VideoPlayer'
 import FloatingWindow from '../components/media/FloatingWindow'
@@ -280,6 +281,74 @@ function FileTreeNodes({ nodes, expanded, onToggle, viewMode, onContextMenu, onR
         )
       })}
     </>
+  )
+}
+
+// ── Model Switcher Component ──
+function ModelSwitcher({ hermesModel, hermesProvider, streaming }: { hermesModel: string; hermesProvider: string; streaming: boolean }) {
+  const [models, setModels] = useState<any[]>([])
+  const [current, setCurrent] = useState<{ model: string; provider: string }>({ model: '', provider: '' })
+  const [showDropdown, setShowDropdown] = useState(false)
+
+  useEffect(() => {
+    api.getAvailableModels().then(d => {
+      setModels(d.models || [])
+      setCurrent(d.current || { model: '', provider: '' })
+    }).catch(() => {})
+  }, [])
+
+  // Show Hermes model when streaming, otherwise show configured model
+  const displayModel = streaming && hermesModel && hermesModel !== '--' ? hermesModel : (current.model || '—')
+  const displayProvider = streaming && hermesProvider && hermesProvider !== '--' ? hermesProvider : (current.provider || '')
+
+  const handleSwitch = async (model: any) => {
+    if (model.active) { setShowDropdown(false); return }
+    const oldName = current.model
+    try {
+      await api.switchModel({ model: model.name, provider: model.provider, thinking: model.thinking, thinking_effort: model.thinking_effort })
+      setModels(prev => prev.map(m => ({ ...m, active: m.id === model.id })))
+      setCurrent({ model: model.name, provider: model.provider })
+      setShowDropdown(false)
+      window.dispatchEvent(new CustomEvent('model-switched', { detail: { from: oldName, to: model.name } }))
+    } catch (e: any) {
+      alert('切换失败')
+    }
+  }
+
+  const activeModels = models.filter(m => m.active)
+
+  return (
+    <div className="relative">
+      <button onClick={() => setShowDropdown(!showDropdown)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-gray-800 transition-colors text-[11px]">
+        <Cpu className={`w-3 h-3 ${streaming ? 'text-green-400 animate-pulse' : 'text-gray-400'}`} />
+        <span className={streaming ? 'text-green-300 font-medium' : 'text-gray-300'}>{displayModel}</span>
+        {displayProvider && <span className="text-gray-500">· {displayProvider}</span>}
+      </button>
+      {showDropdown && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setShowDropdown(false)} />
+          <div className="absolute left-0 top-full mt-1 w-52 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-20 py-1 max-h-64 overflow-y-auto">
+            <div className="px-3 py-1.5 border-b border-gray-700">
+              <p className="text-[10px] text-gray-500">切换模型</p>
+            </div>
+            {models.length > 0 ? models.map(m => (
+              <button key={m.id} onClick={() => handleSwitch(m)}
+                className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 transition-colors ${
+                  m.active ? 'bg-indigo-500/10 text-indigo-400' : 'text-gray-300 hover:bg-gray-700'
+                }`}>
+                <span className="flex-1 truncate">{m.label || m.name}</span>
+                {m.thinking && <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded-full">思考</span>}
+                <span className="text-[10px] text-gray-600">{m.provider}</span>
+                {m.active && <Check className="w-3 h-3 text-indigo-400" />}
+              </button>
+            )) : (
+              <p className="px-3 py-2 text-[10px] text-gray-600">无可用模型</p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -966,6 +1035,18 @@ export default function ProjectView() {
   const videoSrc = useVideoStore(s => s.videoSrc)
   const setVideoSrc = useVideoStore(s => s.setVideoSrc)
 
+  // ── Model switch notification ──
+  const [modelSwitchMsg, setModelSwitchMsg] = useState<string | null>(null)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      setModelSwitchMsg(`模型已由 ${detail.from} 切换为 ${detail.to}`)
+      setTimeout(() => setModelSwitchMsg(null), 5000)
+    }
+    window.addEventListener('model-switched', handler)
+    return () => window.removeEventListener('model-switched', handler)
+  }, [])
+
   const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.tiff', '.avif'])
   const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'])
 
@@ -1213,13 +1294,7 @@ export default function ProjectView() {
 
         {/* Hermes Status Bar */}
         <div className="shrink-0 px-6 py-1.5 border-b border-gray-800 bg-gray-950/80 flex items-center gap-4 text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <Cpu className="w-3 h-3 text-gray-400" />
-            <span className="text-gray-200 font-mono font-medium">{hermesStatus.model || 'Hermes'}</span>
-            {hermesStatus.provider && hermesStatus.provider !== '--' && (
-              <span className="text-gray-500">· {hermesStatus.provider}</span>
-            )}
-          </div>
+          <ModelSwitcher hermesModel={hermesStatus.model} hermesProvider={hermesStatus.provider} streaming={streaming} />
           <div className="flex items-center gap-1.5 text-gray-400">
             <BarChart3 className="w-3 h-3" />
             <span>{(hermesStatus.tokensUsed || 0).toLocaleString()} tokens</span>
@@ -1245,7 +1320,7 @@ export default function ProjectView() {
               连接异常
             </button>
           )}
-          <div className="ml-auto text-gray-400">Hermes Agent v0.19.0</div>
+          <div className="ml-auto"><ModelSwitcher /></div>
         </div>
 
         {/* Messages */}
@@ -1277,6 +1352,16 @@ export default function ProjectView() {
               </button>
             </div>
           )}
+          {/* Model switch notification */}
+          {modelSwitchMsg && (
+            <div className="flex items-center justify-center py-2">
+              <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
+                <Cpu className="w-3 h-3 text-indigo-400" />
+                <span className="text-[11px] text-indigo-400">—————— {modelSwitchMsg} ——————</span>
+              </div>
+            </div>
+          )}
+
           {messages.length === 0 && !streaming && (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
               <Bot className="w-12 h-12 mb-4 text-gray-500" />
@@ -1465,7 +1550,7 @@ export default function ProjectView() {
               {!isAgent && (
                 <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 4 }}>
                   <span style={{ color: 'white', fontSize: 13, fontWeight: 600 }}>
-                    {(msg.sender_name || currentUser?.display_name || 'U').charAt(0).toUpperCase()}
+                    {(() => { const s = msg.sender_name || currentUser?.display_name || 'U'; const ch = [...s][0] || 'U'; return /\p{Emoji}/u.test(ch) ? ch : ch.toUpperCase() })()}
                   </span>
                 </div>
               )}

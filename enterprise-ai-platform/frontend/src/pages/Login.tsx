@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store'
 import { api } from '../services/api'
@@ -6,16 +6,18 @@ import { Sparkles } from 'lucide-react'
 
 export default function Login() {
   const navigate = useNavigate()
-  const { setAuth, isAuthenticated } = useAuthStore()
+  const { setAuth, isAuthenticated, logout } = useAuthStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (isAuthenticated()) {
-    navigate('/', { replace: true })
-    return null
-  }
+  // If already authenticated, redirect to home
+  useEffect(() => {
+    if (isAuthenticated()) {
+      navigate('/', { replace: true })
+    }
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -26,14 +28,14 @@ export default function Login() {
       setAuth(data.access_token, {
         id: data.user_id,
         username: data.username,
-        display_name: data.username,
+        display_name: data.display_name || data.username,
         role: data.role,
         department_id: data.department_id,
         department_name: data.department_name,
       })
       navigate('/')
     } catch (err: any) {
-      setError(err.message)
+      setError(err.message || '登录失败，请重试')
     } finally {
       setLoading(false)
     }
@@ -94,8 +96,8 @@ export default function Login() {
           </button>
 
           <div className="text-xs text-gray-600 text-center pt-2 border-t border-gray-800">
-            <p>测试账号（账号 = 密码）：</p>
-            <p className="mt-1">admin · bianju</p>
+            <p>演示账号：</p>
+            <p className="mt-1">admin / admin · 编剧 / bianju · 美术 / meishu · 发行 / faxing</p>
           </div>
         </form>
       </div>

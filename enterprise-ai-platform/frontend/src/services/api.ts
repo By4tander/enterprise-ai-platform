@@ -37,8 +37,8 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
 
     clearTimeout(timeoutId);
 
-    // 401 → 清除登录态并跳转
-    if (res.status === 401) {
+    // 401 → 清除登录态并跳转（仅在非登录请求时）
+    if (res.status === 401 && !path.includes('/auth/login')) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
       window.location.href = '/login';
@@ -48,7 +48,16 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
     // 非 2xx 响应 → 解析错误信息抛出
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: `请求失败 (HTTP ${res.status})` }));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      let msg: string;
+      if (typeof err.detail === 'string') {
+        msg = err.detail;
+      } else if (Array.isArray(err.detail)) {
+        // Pydantic validation errors → show user-friendly message
+        msg = '输入格式不正确，请检查后重试';
+      } else {
+        msg = `请求失败 (HTTP ${res.status})`;
+      }
+      throw new Error(msg);
     }
 
     return res.json();
@@ -84,6 +93,23 @@ export const api = {
     }),
 
   getMe: () => request('/auth/me'),
+
+  // ── Users ──
+  getUsers: () => request('/auth/users'),
+  updateUser: (id: string, data: any) =>
+    request(`/auth/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteUser: (id: string) =>
+    request(`/auth/users/${id}`, { method: 'DELETE' }),
+
+  // ── Models ──
+  getCurrentModel: () => request('/models/current'),
+  getModelProviders: () => request('/models/providers'),
+  getAvailableModels: () => request('/models/all'),
+  switchModel: (data: { model: string; provider?: string; base_url?: string }) =>
+    request('/models/switch', { method: 'PUT', body: JSON.stringify(data) }),
 
   // ── Departments ──
   getDepartments: () => request('/departments/'),

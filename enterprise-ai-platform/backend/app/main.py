@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.api import auth, departments, projects, skills, messages, artifacts, chat, files, locks, folders
+from app.api import auth, departments, projects, skills, messages, artifacts, chat, files, locks, folders, models
 
 # ---- 日志配置 ----
 logging.basicConfig(
@@ -99,6 +99,7 @@ app.include_router(chat.router)
 app.include_router(files.router)
 app.include_router(locks.router)
 app.include_router(folders.router)
+app.include_router(models.router)
 
 
 @app.get("/")
@@ -121,3 +122,26 @@ async def health_check():
         "hermes_available": HERMES_AVAILABLE,
         "database": "connected",
     }
+
+
+@app.get("/api/health/hermes-model")
+async def hermes_model_info():
+    """读取 Hermes 配置的模型信息"""
+    import yaml
+    from pathlib import Path
+    
+    config_path = Path.home() / ".hermes" / "config.yaml"
+    if not config_path.exists():
+        return {"model": None}
+    
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        model = config.get("model", {})
+        return {
+            "model": model.get("default"),
+            "provider": model.get("provider"),
+            "base_url": model.get("base_url"),
+        }
+    except Exception:
+        return {"model": None}

@@ -22,6 +22,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     username: str
+    display_name: str = ""
     role: str
     department_id: str | None = None
     department_name: str | None = None

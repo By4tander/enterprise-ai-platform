@@ -88,6 +88,7 @@ async def login(req: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)])
         access_token=token,
         user_id=user.id,
         username=user.username,
+        display_name=user.display_name or user.username,
         role=user.role.value,
         department_id=user.department_id,
         department_name=user.department.name if user.department else None,
@@ -116,3 +117,87 @@ async def refresh_token(current_user: Annotated[User, Depends(get_current_user)]
         department_id=current_user.department_id,
         department_name=current_user.department.name if current_user.department else None,
     )
+
+
+@router.get("/users")
+async def list_users(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取所有用户列表（仅管理员）"""
+    if current_user.role.value not in ('super_admin', 'dept_admin'):
+        raise HTTPException(status_code=403, detail="权限不足")
+    result = await db.execute(select(User).options(selectinload(User.department)))
+    users = result.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "display_name": u.display_name,
+            "role": u.role.value,
+            "department_id": u.department_id,
+            "department_name": u.department.name if u.department else None,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in users
+    ]
+
+
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    data: dict,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """更新用户信息（名称/密码）"""
+    # Only self or admin can update
+    if current_user.id != user_id and current_user.role.value not in ('super_admin', 'dept_admin'):
+        raise HTTPException(status_code=403, detail="权限不足")
+
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # Update username (check uniqueness)
+    if "username" in data and data["username"] != target.username:
+        existing = await db.execute(select(User).where(User.username == data["username"]))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="用户名已存在")
+        target.username = data["username"]
+
+    # Update display name
+    if "display_name" in data:
+        target.display_name = data["display_name"]
+
+    # Change password (self requires current_password)
+    if "password" in data:
+        if current_user.id == user_id:
+            current_pwd = data.get("current_password", "")
+            if not verify_password(current_pwd, target.password_hash):
+                raise HTTPException(status_code=400, detail="当前密码错误")
+        target.password_hash = hash_password(data["password"])
+
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除用户（仅超级管理员）"""
+    if current_user.role.value != 'super_admin':
+        raise HTTPException(status_code=403, detail="仅超级管理员可删除用户")
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="不能删除自己")
+
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    await db.delete(target)
+    await db.commit()
+    return {"ok": True}
