@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useAppStore } from '../../store'
 import { api } from '../../services/api'
 import { hasPermission } from '../../utils/permissions'
-import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, ChevronDown, Loader2, AlertCircle, Pencil, Check, X, Zap, Folder, Palette, Trash2, Settings } from 'lucide-react'
+import { FolderOpen, BookOpen, Archive, Plus, ChevronRight, ChevronDown, Loader2, AlertCircle, Pencil, Check, X, Zap, Folder, Palette, Trash2, Settings, Bot } from 'lucide-react'
 
 interface Project {
   id: string
@@ -176,6 +176,7 @@ export default function Sidebar() {
 
   const navItems = [
     { icon: FolderOpen, label: '工作台', path: '/', active: location.pathname === '/' || location.pathname.startsWith('/project/') },
+    { icon: Bot, label: 'AI工具平台', path: '/ai-tools', active: location.pathname === '/ai-tools' },
     { icon: Zap, label: 'Hermes 全局技能', path: '/global-skills', active: location.pathname === '/global-skills' },
     { icon: BookOpen, label: 'Agent 资源库', path: '/skills', active: location.pathname === '/skills' },
   ]
@@ -291,7 +292,7 @@ export default function Sidebar() {
             key={item.path}
             onClick={() => {
               navigate(item.path)
-              if (item.path === '/skills' || item.path === '/global-skills') setCurrentProject(null)
+              if (item.path === '/skills' || item.path === '/global-skills' || item.path === '/ai-tools') setCurrentProject(null)
             }}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-1 transition-colors ${
               item.active ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'

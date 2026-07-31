@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import ProjectView from './pages/ProjectView'
 import AgentResourceHub from './pages/AgentResourceHub'
 import HermesGlobalSkills from './pages/HermesGlobalSkills'
+import AIToolsPage from './pages/AIToolsPage'
 import FloatingWindow from './components/media/FloatingWindow'
 import VideoPlayer from './components/media/VideoPlayer'
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -57,6 +58,7 @@ function App() {
           <Route path="project/:projectId" element={<ProjectView />} />
           <Route path="skills" element={<AgentResourceHub />} />
           <Route path="global-skills" element={<HermesGlobalSkills />} />
+          <Route path="ai-tools" element={<AIToolsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

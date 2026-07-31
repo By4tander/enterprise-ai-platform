@@ -4,14 +4,12 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
-import yaml
 import os as _os
 
 from app.database import get_db
@@ -74,18 +72,6 @@ async def chat_stream(req: ChatRequest, request: Request, db: Annotated[AsyncSes
     except Exception:
         pass
 
-    # Sync model to global config
-    if model_config and model_config.get("model"):
-        try:
-            cfg_path = Path.home() / ".hermes" / "config.yaml"
-            if cfg_path.exists():
-                with open(cfg_path) as f: cfg = yaml.safe_load(f) or {}
-                if "model" not in cfg: cfg["model"] = {}
-                cfg["model"]["default"] = model_config["model"]
-                cfg["model"]["provider"] = model_config["provider"]
-                with open(cfg_path, "w") as f: yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
-        except Exception: pass
-
     # Create background task
     bk_task = ChatBackgroundTask(req.project_id, current_user.id)
     register_task(bk_task)
@@ -93,6 +79,7 @@ async def chat_stream(req: ChatRequest, request: Request, db: Annotated[AsyncSes
     async def event_generator():
         content_parts = []
         thinking_parts = []
+        total_tokens_used = 0  # track from context events
         bk_chunks = bk_task.chunks
 
         # Producer: runs bridge.chat() → appends to chunks list
@@ -124,9 +111,9 @@ async def chat_stream(req: ChatRequest, request: Request, db: Annotated[AsyncSes
                         full_content = "".join(content_parts)
                         full_thinking = "".join(thinking_parts)
                         if full_content or full_thinking:
-                            agent_msg = Message(project_id=req.project_id, sender_type=SenderType.AGENT, sender_name="hermes-agent",
+                            agent_msg = Message(project_id=req.project_id, sender_type=SenderType.AGENT, sender_name="Hermes Agent",
                                 content=full_content or "(思考过程)", thinking_content=full_thinking,
-                                tokens_used=done_data.get("total_tokens", 0))
+                                tokens_used=total_tokens_used or done_data.get("total_tokens", 0))
                             db.add(agent_msg)
                             await db.commit()
                             await db.refresh(agent_msg)
@@ -160,7 +147,10 @@ async def chat_stream(req: ChatRequest, request: Request, db: Annotated[AsyncSes
                         thinking_parts.append(event_data)
                         yield {"event": "thinking", "data": json.dumps({"type": "thinking_chunk", "content": event_data}, ensure_ascii=False)}
                     elif event_type == "context":
-                        yield {"event": "context", "data": json.dumps({"type": "context"}, ensure_ascii=False)}
+                        # Parse context data from bridge (includes tokens_used)
+                        ctx_data = json.loads(event_data) if isinstance(event_data, str) else event_data
+                        total_tokens_used = ctx_data.get("tokens_used", 0) or ctx_data.get("total_tokens", 0)
+                        yield {"event": "context", "data": json.dumps(ctx_data, ensure_ascii=False)}
                     elif event_type == "queue":
                         yield {"event": "status", "data": json.dumps({"type": "status", "content": event_data}, ensure_ascii=False)}
                     else:

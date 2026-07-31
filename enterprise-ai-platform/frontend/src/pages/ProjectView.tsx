@@ -36,6 +36,7 @@ interface Message {
   thinking_content: string | null
   attachments?: MessageAttachment[] | null
   timestamp: string
+  tokens_used?: number
 }
 
 interface Artifact {
@@ -320,17 +321,16 @@ function ModelSwitcher({ hermesModel, hermesProvider, streaming, projectId }: { 
 
   const handleSwitch = async (model: any) => {
     if (model.active) { setShowDropdown(false); return }
-    const oldName = current.model || ''
     try {
-      // Save to global config (immediate effect) AND project preference (persistent)
-      await api.switchModel({ model: model.name, provider: model.provider, thinking: model.thinking, thinking_effort: model.thinking_effort })
+      // Per-project model preference only — NEVER touch global config
       if (projectId) {
         await api.setProjectModel(projectId, { model: model.name, provider: model.provider, thinking: model.thinking }).catch(() => {})
       }
       setModels(prev => prev.map(m => ({ ...m, active: m.id === model.id })))
       setCurrent({ model: model.name, provider: model.provider })
       setShowDropdown(false)
-      window.dispatchEvent(new CustomEvent('model-switched', { detail: { from: oldName, to: model.name } }))
+      // Dispatch per-project switch notification
+      window.dispatchEvent(new CustomEvent('model-switched', { detail: { from: current.model || '', to: model.name, projectId } }))
     } catch (e: any) {
       alert('切换失败')
     }
@@ -524,8 +524,9 @@ export default function ProjectView() {
   const streamContentRef = useRef('')
   const streamThinkingRef = useRef('')
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  const initialLoadDone = useRef(false)
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior })
   }
 
   useEffect(() => {
@@ -609,7 +610,20 @@ export default function ProjectView() {
       // 处理消息响应（支持新格式和旧格式）
       const msgData = msgs?.messages || msgs
       const msgList = Array.isArray(msgData) ? msgData : []
-      setMessages(msgList)
+      // Restore persisted model switch events
+      const withSwitches = [...msgList]
+      try {
+        const key = `model_switches_${projectId}`
+        const saved = JSON.parse(localStorage.getItem(key) || '[]')
+        for (const sw of saved) {
+          // Insert switch event at the right timestamp position
+          const swMsg = { id: `sw-${sw.ts}`, sender_type: 'system', sender_name: '', content: `模型已由 ${sw.from} 切换为 ${sw.to}`, thinking_content: null, timestamp: sw.ts }
+          const insertIdx = withSwitches.findIndex(m => m.timestamp > sw.ts)
+          if (insertIdx >= 0) withSwitches.splice(insertIdx, 0, swMsg as Message)
+          else withSwitches.push(swMsg as Message)
+        }
+      } catch {}
+      setMessages(withSwitches)
       // 如果最后一条是用户消息且没有 agent 回复 → agent 可能在后台工作中
       if (msgList.length > 0) {
         const last = msgList[msgList.length - 1]
@@ -645,7 +659,7 @@ export default function ProjectView() {
     }
   }, [projectId])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => { initialLoadDone.current = false; loadData() }, [loadData])
 
   // ── 挂载后检测是否需要恢复流 ──
   useEffect(() => {
@@ -659,24 +673,6 @@ export default function ProjectView() {
       setHermesStatus(prev => ({ ...prev, status: st.status || '推理中...', model: st.model || prev.model, provider: st.provider || prev.provider }))
     }
   }, [projectId, loading])
-
-  // ── 检测是否有后台流完成后需要刷新消息 ──
-  useEffect(() => {
-    if (!projectId) return
-    const streamKey = `active_stream_${projectId}`
-    const checkAndReload = () => {
-      if (localStorage.getItem(streamKey) === '1') {
-        const poll = setInterval(() => {
-          if (localStorage.getItem(streamKey) !== '1') {
-            clearInterval(poll)
-            loadData()
-          }
-        }, 2000)
-        return () => clearInterval(poll)
-      }
-    }
-    return checkAndReload()
-  }, [projectId])
 
   // ── 自动恢复后台对话（最高优先级，在渲染前执行） ──
   const [resumeStatus, setResumeStatus] = useState('')
@@ -771,7 +767,18 @@ export default function ProjectView() {
   useEffect(() => {
     fetch(`http://${window.location.hostname}:8000/api/files/warmup-picker`, { method: 'POST' }).catch(() => {})
   }, [])
-  useEffect(() => { scrollToBottom() }, [messages, streamContent])
+  useEffect(() => {
+    if (!initialLoadDone.current && messages.length > 0) {
+      // First load: instant scroll, no animation
+      initialLoadDone.current = true
+      requestAnimationFrame(() => scrollToBottom('instant' as ScrollBehavior))
+    } else if (streaming) {
+      // During streaming: gentle auto scroll, no bounce
+      scrollToBottom('auto' as ScrollBehavior)
+    } else if (initialLoadDone.current) {
+      scrollToBottom()
+    }
+  }, [messages, streamContent])
 
   // ── 项目锁定：进入项目时获取锁，离开时释放 ──
   useEffect(() => {
@@ -887,7 +894,7 @@ export default function ProjectView() {
     const userMsg: Message = {
       id: `temp-${Date.now()}`,
       sender_type: 'user',
-      sender_name: '我',
+      sender_name: currentUser?.display_name || currentUser?.username || '我',
       content: fullContent,
       thinking_content: null,
       attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
@@ -915,12 +922,28 @@ export default function ProjectView() {
     if (!projectId) return
     const handler = (e: CustomEvent) => {
       if (e.detail.projectId === projectId) {
+        // Read final content from store (not refs — store is the source of truth)
+        const st = useStreamStore.getState().streams[projectId]
+        const finalContent = st?.content || ''
+        const finalThinking = st?.thinking || ''
+        if (finalContent || finalThinking) {
+          setMessages((prev) => [...prev, {
+            id: `msg-${e.detail.messageId || Date.now()}`,
+            sender_type: 'agent',
+            sender_name: 'Hermes Agent',
+            content: finalContent || '(无内容)',
+            thinking_content: finalThinking || null,
+            timestamp: new Date().toISOString(),
+            tokens_used: st?.tokensUsed || 0,
+          }])
+        }
         setStreaming(false)
         setStreamContent('')
         setStreamThinking('')
+        streamContentRef.current = ''
+        streamThinkingRef.current = ''
         localStorage.removeItem(`active_stream_${projectId}`)
         setHermesStatus(prev => ({ ...prev, status: '空闲', elapsed: 0 }))
-        loadData()  // 重新加载消息列表（包含新回复）
         setTimeout(() => api.getArtifacts(projectId).then(setArtifacts).catch(() => {}), 500)
         autoSendPendingRef.current = true
       }
@@ -1135,16 +1158,31 @@ export default function ProjectView() {
   const videoSrc = useVideoStore(s => s.videoSrc)
   const setVideoSrc = useVideoStore(s => s.setVideoSrc)
 
-  // ── Model switch notification ──
-  const [modelSwitchMsg, setModelSwitchMsg] = useState<string | null>(null)
+  // ── Model switch notification — filtered by projectId ──
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      setModelSwitchMsg(`模型已由 ${detail.from} 切换为 ${detail.to}`)
+      if (detail.projectId && detail.projectId !== projectId) return
+      const systemMsg = {
+        id: `switch-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+        sender_type: 'system',
+        sender_name: '',
+        content: `模型已由 ${detail.from} 切换为 ${detail.to}`,
+        thinking_content: null,
+        timestamp: new Date().toISOString(),
+      } as Message
+      setMessages((prev) => [...prev, systemMsg])
+      // Persist switch event so it survives page reloads
+      try {
+        const key = `model_switches_${projectId}`
+        const existing = JSON.parse(localStorage.getItem(key) || '[]')
+        existing.push({ from: detail.from, to: detail.to, ts: systemMsg.timestamp })
+        localStorage.setItem(key, JSON.stringify(existing.slice(-20)))
+      } catch {}
     }
     window.addEventListener('model-switched', handler)
     return () => window.removeEventListener('model-switched', handler)
-  }, [])
+  }, [projectId])
 
   const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.tiff', '.avif'])
   const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.m4v'])
@@ -1475,6 +1513,17 @@ export default function ProjectView() {
           )}
 
           {messages.map((msg) => {
+            // System message (model switch divider)
+            if (msg.sender_type === 'system') {
+              return (
+                <div key={msg.id} className="flex items-center justify-center py-2">
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
+                    <Cpu className="w-3 h-3 text-indigo-400" />
+                    <span className="text-[11px] text-indigo-400">{msg.content}</span>
+                  </div>
+                </div>
+              )
+            }
             const isAgent = msg.sender_type === 'agent'
             return (
             <div key={msg.id} className={`flex gap-3 ${isAgent ? 'justify-start' : 'justify-end'}`}>
@@ -1487,10 +1536,19 @@ export default function ProjectView() {
 
               <div className={`max-w-[75%] ${isAgent ? '' : 'order-first'}`}>
                 <div className={`flex items-center gap-2 mb-1 ${msg.sender_type === 'user' ? 'justify-end' : ''}`}>
-                  <span className="text-xs text-gray-400">{msg.sender_name}</span>
+                  <span className="text-xs text-gray-400">
+                    {msg.sender_type === 'user' && currentUser && (msg.sender_name === currentUser.username || msg.sender_name === currentUser.display_name)
+                      ? (currentUser.display_name || msg.sender_name)
+                      : msg.sender_name}
+                  </span>
                   <span className="text-[10px] text-gray-500">
                     {new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}
                   </span>
+                  {Boolean(msg.tokens_used && msg.tokens_used > 0) && (
+                    <span className="text-[9px] text-amber-500/60 flex items-center gap-[2px] ml-0.5">
+                      ⚡{(msg.tokens_used! / 1000) >= 1 ? `${(msg.tokens_used! / 1000).toFixed(1)}k` : msg.tokens_used!.toLocaleString()}
+                    </span>
+                  )}
                 </div>
 
                 {/* Thinking Accordion */}
@@ -1647,11 +1705,11 @@ export default function ProjectView() {
                 </div>
               </div>
 
-              {/* 用户头像 — 显示用户名首字母 */}
+              {/* 用户头像 — 显示用户昵称首字 */}
               {!isAgent && (
                 <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 4 }}>
                   <span style={{ color: 'white', fontSize: 13, fontWeight: 600 }}>
-                    {(() => { const s = msg.sender_name || currentUser?.display_name || 'U'; const ch = [...s][0] || 'U'; return /\p{Emoji}/u.test(ch) ? ch : ch.toUpperCase() })()}
+                    {(() => { const s = currentUser?.display_name || msg.sender_name || 'U'; const ch = [...s][0] || 'U'; return /\p{Emoji}/u.test(ch) ? ch : ch.toUpperCase() })()}
                   </span>
                 </div>
               )}
@@ -1665,7 +1723,7 @@ export default function ProjectView() {
                 <span style={{ color: 'white', fontSize: 14, fontWeight: 700 }}>H</span>
               </div>
               <div className="max-w-[75%]">
-                <span className="text-xs text-gray-400">AI 助手</span>
+                <span className="text-xs text-gray-400">Hermes Agent</span>
                 {streamThinking && (
                   <details className="mb-2 group" open={showThinking}>
                     <summary className="text-xs text-gray-400 cursor-pointer hover:text-blue-400 transition-colors flex items-center gap-1.5 select-none"
@@ -1810,14 +1868,6 @@ export default function ProjectView() {
             </div>
           )}
 
-          {/* Model switch notification — inside messages area at bottom */}
-          {modelSwitchMsg && (
-            <div className="flex items-center justify-center py-1">
-              <span className="text-[11px] text-indigo-400 bg-indigo-500/5 px-3 py-0.5 rounded-full">
-                {modelSwitchMsg}
-              </span>
-            </div>
-          )}
           <div ref={messagesEndRef} />
         </div>
 

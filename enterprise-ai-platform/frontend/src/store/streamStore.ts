@@ -114,6 +114,8 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
         } catch {}
       },
       onDone: (messageId) => {
+        // Dispatch event FIRST (so handler can read content before we clear state)
+        window.dispatchEvent(new CustomEvent('stream-done', { detail: { projectId, messageId } }))
         set(s => ({
           streams: {
             ...s.streams,
@@ -124,8 +126,6 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
             },
           },
         }))
-        // Dispatch event for ProjectView to reload messages
-        window.dispatchEvent(new CustomEvent('stream-done', { detail: { projectId, messageId } }))
       },
       onError: (err) => {
         set(s => ({
